@@ -46,8 +46,8 @@ export const DEFAULT_CONFIG = {
   cooldownMin: 30,
   slippage: 0.05,
   // --- LOOP ---
-  scanIntervalSec: 45,
-  priceIntervalSec: 20,
+  scanIntervalSec: 30,   // v3.14: quicker scans (user 2026-10-06) — was 45s
+  priceIntervalSec: 15,   // v3.14: quicker ticks — was 20s
 };
 
 const num = (v, fb) => {
