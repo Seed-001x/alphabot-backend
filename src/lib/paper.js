@@ -25,7 +25,7 @@ export function freshPortfolio(bankroll0, bankrollSol) {
     signals: [],
     cooldowns: {},
     createdAt: Date.now(),
-    version: 6,   // v3.12: sub-$100k universe — fresh paper portfolio
+    version: 7,   // v3.13: 0.5 SOL book — fresh paper portfolio
   };
 }
 
@@ -44,19 +44,19 @@ export async function initPortfolio(cfg) {
       const { rows } = await pool.query('SELECT state FROM ab_desk_state WHERE id = 1');
       if (rows.length && rows[0].state && Array.isArray(rows[0].state.positions)) {
         // v3.8: version gate — old sizing/bankroll regimes don't carry over.
-        if (rows[0].state.version === 6) {
+        if (rows[0].state.version === 7) {
           P = rows[0].state;
           hydrated = true;
           console.log(`[paper] portfolio restored: $${(P.cash || 0).toFixed(0)} cash, ${(P.positions || []).length} open, ${(P.closed || []).length} closed`);
           return P;
         }
-        console.log(`[paper] portfolio version ${rows[0].state.version || '?'} → resetting to v6 (sub-$100k universe)`);
+        console.log(`[paper] portfolio version ${rows[0].state.version || '?'} → resetting to v7 (0.5 SOL book)`);
       }
     } catch (e) {
       console.error('[paper] restore failed:', e.message);
     }
   }
-  // Bankroll is SOL-denominated (user: 5 SOL). USD book value is set once at
+  // Bankroll is SOL-denominated (user: 0.5 SOL). USD book value is set once at
   // creation from the live SOL price; positions are sized in SOL throughout.
   const bSol = cfg.bankrollSol || 0;
   let spx0 = 150;
@@ -132,9 +132,8 @@ export function processResult(p, r, cfg, opts = {}) {
   if (cd && now - cd < cfg.cooldownMin * 60000)
     return gate(`cooldown — ${fmtDur(cfg.cooldownMin * 60000 - (now - cd))} left`);
 
-  // v3.12: SOL-denominated sizing for the sub-$100k universe.
-  // Score bands only (whale rule retired — nothing over $100k can enter).
-  // 55–74 → 1.0 SOL · 75–84 → 1.5 SOL · 85+ → 2.0 SOL.
+  // v3.13: SOL-denominated sizing, 0.5 SOL book. Score bands only.
+  // 55–74 → 0.10 SOL · 75–84 → 0.15 SOL · 85+ → 0.20 SOL.
   const spx = (opts && opts.solPrice) || 150;
   let solSize;
   if (finalScore >= 85) solSize = cfg.solSizeTop;

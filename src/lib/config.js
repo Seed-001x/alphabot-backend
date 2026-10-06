@@ -3,7 +3,7 @@
 // Server owns the config; a few knobs are env-overridable.
 
 export const DEFAULT_CONFIG = {
-  bankrollSol: 5,   // v3.8: bankroll denominated in SOL (user's call) — USD value set at portfolio creation from live SOL price
+  bankrollSol: 0.5,   // v3.13: 0.5 SOL book (user's call 2026-10-06) — realistic sizing for 24/7 running
   bankroll0: 1000,  // legacy USD fallback (only used if bankrollSol is unset)
   minTokenScore: 55,   // v3.10: wider net — the bot learns by trading, not by watching
   minLiquidityUsd: 2000,   // graduated coins only (on-curve skips this — curve IS liquidity)
@@ -27,17 +27,17 @@ export const DEFAULT_CONFIG = {
   maxTop10Pct: 70,
   eliteBoost: 8,
   // --- TRADE (paper risk engine, v3.6 scalp retune) ---
-  // v3.12: sub-$100k universe. Score bands only — no small trades, min 1 SOL.
-  // 55–74 → 1.0 SOL · 75–84 → 1.5 SOL · 85+ → 2.0 SOL.
+  // v3.13: 0.5 SOL book. Score bands rescaled — every trade a real chunk of book, no dust.
+  // 55–74 → 0.10 SOL · 75–84 → 0.15 SOL · 85+ → 0.20 SOL.
   maxPositions: 5,
-  solSizeBase: 1.0,
-  solSizeMid: 1.5,
-  solSizeTop: 2.0,
-  // Early-ape: under $100k MC + score ≥ 80 → 1.5 SOL conviction size.
+  solSizeBase: 0.10,
+  solSizeMid: 0.15,
+  solSizeTop: 0.20,
+  // Early-ape: under $100k MC + score ≥ 80 → 0.15 SOL conviction size.
   // (Universe is now sub-$100k, so this overlaps the bands — kept for tuning.)
   earlyMcUsd: 100000,
   earlyMinScore: 80,
-  earlySolSize: 1.5,
+  earlySolSize: 0.15,
   takeProfit: 0.30,
   stopLoss: 0.15,
   trailingStop: 0.12,
