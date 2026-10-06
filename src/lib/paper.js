@@ -237,7 +237,7 @@ export function tick(p, priceMap, eliteSwaps, cfg) {
       mint: pos.mint, symbol: pos.symbol, name: pos.name,
       entryMc: pos.entryMc, exitMc,
       multiple: pos.sizeUsd > 0 ? proceeds / pos.sizeUsd : 1,
-      pnlUsd: pnl,
+      pnlUsd: pnl, solSize: pos.solSize || null,   // v3.9: size carried into history
       holdMs: now - pos.entryTs,
       exitReason: reason,
       entryTs: pos.entryTs, exitTs: now,
