@@ -8,7 +8,7 @@ export const DEFAULT_CONFIG = {
   minTokenScore: 50,   // v3.15: more balls — was 55
   minLiquidityUsd: 2000,   // graduated coins only (on-curve skips this — curve IS liquidity)
   minVol24hUsd: 2500,      // v3.10: wider net — was 5000
-  pumpMinMc: 20000,     // user's spec: $20k min MC IS the newness filter —
+  pumpMinMc: 8000,      // v3.16: catch volume plays earlier — was 20000 (missing sub-$20k movers)
   // a coin at $20k+ already proved it has buyers; never kill for being young
   pumpMaxMc: 100000,   // v3.12: sub-$100k universe — hard ceiling
   minMc: 50000,
