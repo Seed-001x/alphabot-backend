@@ -25,7 +25,7 @@ import { recentEvents, floorEmit } from '../lib/events.js';
 
 const VET_PER_CYCLE = 25;
 const RUG_PER_CYCLE = 8;
-const RESEARCH_PER_CYCLE = 4;
+const RESEARCH_PER_CYCLE = 6;   // v3.10: wider net — was 4
 const JUDGE_PER_CYCLE = 3;
 const DEDUP_MS = 90 * 60 * 1000;
 

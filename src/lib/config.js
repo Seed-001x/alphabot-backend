@@ -5,9 +5,9 @@
 export const DEFAULT_CONFIG = {
   bankrollSol: 5,   // v3.8: bankroll denominated in SOL (user's call) — USD value set at portfolio creation from live SOL price
   bankroll0: 1000,  // legacy USD fallback (only used if bankrollSol is unset)
-  minTokenScore: 65,
-  minLiquidityUsd: 2000,   // was 3000 — on-curve liquidity reads low for young coins
-  minVol24hUsd: 5000,      // was 10000 — "with volume" for a young coin is lower
+  minTokenScore: 55,   // v3.10: wider net — the bot learns by trading, not by watching
+  minLiquidityUsd: 2000,   // graduated coins only (on-curve skips this — curve IS liquidity)
+  minVol24hUsd: 2500,      // v3.10: wider net — was 5000
   pumpMinMc: 20000,     // user's spec: $20k min MC IS the newness filter —
   // a coin at $20k+ already proved it has buyers; never kill for being young
   pumpMaxMc: 1000000,   // user's spec: scan under $1M — hard ceiling
@@ -19,10 +19,10 @@ export const DEFAULT_CONFIG = {
   minAgeMin: 0,          // disabled — the $20k MC floor does this job
   maxPumpAgeHrs: 48,
   maxAgeDays: 7,
-  minBuys24h: 5,         // was 10 — young coins have fewer buys
+  minBuys24h: 3,         // v3.10: wider net — was 5
   requireSells: true,
   maxDevPct: 25,
-  minHolders: 10,        // was 25 — a 3-minute-old coin has ~10 holders
+  minHolders: 5,         // v3.10: wider net — was 10
   maxTopHolderPct: 35,
   maxTop10Pct: 70,
   eliteBoost: 8,
