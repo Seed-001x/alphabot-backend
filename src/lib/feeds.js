@@ -147,6 +147,22 @@ export function momentumScore(t) {
   return null;
 }
 
+// Ignition detector — the sniper's entry. Sudden volume expansion on a low
+// market cap = the moment before the pump. Uses one-cycle volume jump from
+// the snapshot store (fast), not the slow 24h aggregates.
+export function ignitionSignal(mint, t) {
+  try {
+    const s = loadStore();
+    const e = s[mint];
+    if (!e || !e.prev || !e.last) return null;
+    if (!(e.prev.vol > 0)) return null;
+    const spike = (e.last.vol || 0) / e.prev.vol;
+    const gradRun = t && t.curvePct != null && t.curvePct >= 75 && spike >= 1.2;
+    const ignition = spike >= 1.5 && t && t.mc < 200000;
+    if (!ignition && !gradRun) return null;
+    return { ignition, gradRun, spike };
+  } catch { return null; }
+}
 // Accumulation detector — the user's edge: buy the slow volume crawl,
 // not the boom. From the snapshot store (first/prev/last per mint):
 // vol climbing steadily (×1.5+, rising across snapshots) while market cap

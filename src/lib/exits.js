@@ -116,6 +116,24 @@ export function exitPolicy(pos, q, cfg, rules) {
     return { reason: `max hold ${cfg.maxHoldHours}h reached`, learned: false };
   }
 
+  // SNIPER PLAYBOOK (baked, ungated): memecoin exits are about speed.
+  // Order-flow death — track buys/sells flow SINCE ENTRY (24h aggregates move
+  // too slowly tick-to-tick). If sell flow dominates buy flow 1.5x with
+  // meaningful volume, it's distribution: get out before the floor falls out.
+  const b = q.buys24h, s = q.sells24h;
+  if (b != null && s != null) {
+    if (pos.flowB0 == null) { pos.flowB0 = b; pos.flowS0 = s; }
+    const dB = Math.max(0, b - pos.flowB0), dS = Math.max(0, s - pos.flowS0);
+    if (dB + dS >= 10 && dS > dB * 1.5 && pnlPct < 15) {
+      return { reason: `flow dead · +${dB} buys vs +${dS} sells since entry — distribution`, learned: false };
+    }
+  }
+  // Stall — 20 minutes in and it hasn't moved: it's not going to. Rotate.
+  // (Doesn't touch runners: TP/trailing returned above.)
+  if (holdMs >= 20 * 60e3 && pnlPct > -5 && pnlPct < 10) {
+    return { reason: `stalled ${Math.round(holdMs / 60000)}m · flat ${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(0)}% — rotating`, learned: false };
+  }
+
   if (rules.deadCut.active && holdMs >= 20 * 60e3 && pnlPct >= -8 && pnlPct <= 5) {
     const ev = pos.entryVol || null;
     const cv = q.vol24h || null;

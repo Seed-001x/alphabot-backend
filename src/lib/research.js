@@ -10,7 +10,7 @@ import { pumpSocials } from './pumpfun.js';
 import { calloutCheck } from './callouts.js';
 import { floorEmit } from './events.js';
 import { storage } from './storage.js';
-import { accumulationSignal } from './feeds.js';
+import { accumulationSignal, ignitionSignal } from './feeds.js';
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
@@ -289,6 +289,22 @@ async function researchInner(t, dossier) {
         } else if (acc.chase) {
           bits.push(`boomed +${Math.round(acc.mcapChange * 100)}% but pressure ${Math.round(bp)} — no chase penalty`);
         }
+      }
+    } catch { /* fail-open */ }
+  }
+
+  // (e1) ignition — the sniper's entry (baked playbook). Sudden volume
+  // expansion on a low MC = the moment before the pump. Graduation run =
+  // curve nearly complete + volume waking up = high-probability runner.
+  if (Date.now() < deadline) {
+    try {
+      const ig = ignitionSignal(t.address, t);
+      if (ig && ig.ignition) {
+        modifier += 8;
+        bits.push(`ignition +8 · vol ×${ig.spike.toFixed(1)} in one cycle, mc $${Math.round(t.mc / 1000)}k — before the pump`);
+      } else if (ig && ig.gradRun) {
+        modifier += 6;
+        bits.push(`graduation run +6 · curve ${Math.round(t.curvePct)}% + vol ×${ig.spike.toFixed(1)} — high-probability runner`);
       }
     } catch { /* fail-open */ }
   }

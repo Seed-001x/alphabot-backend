@@ -160,6 +160,20 @@ export async function rugKill(t, cfg) {
 }
 
 // ---------------------------------------------------------- SCORE
+// Heat triage — how "alive" a candidate is right now, from data already in
+// hand (no API calls). Drives research-queue order: hot coins get the
+// expensive research first, cold ones wait at the back.
+export function heatOf(t) {
+  let h = 0;
+  const turnover = (t.vol24h && t.mc) ? t.vol24h / t.mc : 0;
+  h += Math.min(turnover * 10, 30);
+  if (t.buys24h != null && t.sells24h != null && t.buys24h + t.sells24h > 0) {
+    h += (t.buys24h / (t.buys24h + t.sells24h)) * 30;
+  }
+  if (t.mc < 200000 && turnover >= 1) h += 20;   // low-MC high-turnover = hot
+  return h;
+}
+
 export function scoreToken(t, dossier, cfg) {
   const ageH = t.createdAt ? (Date.now() - t.createdAt) / 3600000 : null;
   const liquidity = logScale(t.liquidity, cfg.minLiquidityUsd, 1e6);

@@ -5,7 +5,7 @@
 
 import { loadConfig } from '../lib/config.js';
 import { initStorage, storage } from '../lib/storage.js';
-import { scanTokens, vetToken, scoreToken } from '../lib/pipeline.js';
+import { scanTokens, vetToken, scoreToken, heatOf } from '../lib/pipeline.js';
 import { researchToken } from '../lib/research.js';
 import { judgeToken, getJudgeStats } from '../lib/aiJudge.js';
 import { warmCalloutCache } from '../lib/callouts.js';
@@ -133,6 +133,8 @@ async function scanCycle() {
 
     // RESEARCH + JUDGE + final scoring (slow, few per cycle).
     const elite = await refreshElite();
+    // Heat triage: hottest first — bad coins don't waste the research budget.
+    try { Q.research.sortBy(heatOf); } catch { /* fifo */ }
     // SOL price once per cycle for SOL-denominated sizing (cached 2m server-side).
     let spx = null;
     try { spx = await solPrice(); } catch { spx = null; }
@@ -190,7 +192,7 @@ async function priceTick() {
       const { tokenView } = await import('../lib/dexscreener.js');
       for (const m of mints) {
         const t = tokenView(raw[m]);
-        if (t) priceMap[m] = { price: t.price, mc: t.mc, vol24h: t.vol24h };
+        if (t) priceMap[m] = { price: t.price, mc: t.mc, vol24h: t.vol24h, buys24h: t.buys24h, sells24h: t.sells24h };
       }
     }
     const elite = await refreshElite();
