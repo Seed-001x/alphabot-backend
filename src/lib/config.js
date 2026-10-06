@@ -5,7 +5,7 @@
 export const DEFAULT_CONFIG = {
   bankrollSol: 0.5,   // v3.13: 0.5 SOL book (user's call 2026-10-06) — realistic sizing for 24/7 running
   bankroll0: 1000,  // legacy USD fallback (only used if bankrollSol is unset)
-  minTokenScore: 55,   // v3.10: wider net — the bot learns by trading, not by watching
+  minTokenScore: 50,   // v3.15: more balls — was 55
   minLiquidityUsd: 2000,   // graduated coins only (on-curve skips this — curve IS liquidity)
   minVol24hUsd: 2500,      // v3.10: wider net — was 5000
   pumpMinMc: 20000,     // user's spec: $20k min MC IS the newness filter —
