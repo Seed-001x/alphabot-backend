@@ -6,37 +6,40 @@ export const DEFAULT_CONFIG = {
   bankrollSol: 5,   // v3.8: bankroll denominated in SOL (user's call) — USD value set at portfolio creation from live SOL price
   bankroll0: 1000,  // legacy USD fallback (only used if bankrollSol is unset)
   minTokenScore: 65,
-  minLiquidityUsd: 3000,
-  minVol24hUsd: 10000,
+  minLiquidityUsd: 2000,   // was 3000 — on-curve liquidity reads low for young coins
+  minVol24hUsd: 5000,      // was 10000 — "with volume" for a young coin is lower
   pumpMinMc: 5000,
-  pumpMaxMc: 2000000,
+  pumpMaxMc: 1000000,   // user's spec: scan under $1M — hard ceiling
   minMc: 50000,
-  maxMc: 30000000,
-  minAgeMin: 5,
+  maxMc: 1000000,      // user's spec: scan under $1M — hard ceiling (was $30M)
+  // v3.9: kill chain retuned for the NEW-COIN game (20k–1M MC pump.fun coins
+  // with volume). The old filters were built for safe graduated coins and
+  // killed every newborn — exactly the universe the user trades.
+  minAgeMin: 2,          // was 5 — newborns are the trade
   maxPumpAgeHrs: 48,
   maxAgeDays: 7,
-  minBuys24h: 10,
+  minBuys24h: 5,         // was 10 — young coins have fewer buys
   requireSells: true,
   maxDevPct: 25,
-  minHolders: 25,
+  minHolders: 10,        // was 25 — a 3-minute-old coin has ~10 holders
   maxTopHolderPct: 35,
   maxTop10Pct: 70,
   eliteBoost: 8,
   // --- TRADE (paper risk engine, v3.6 scalp retune) ---
-  maxPositions: 8,
-  // v3.8: SOL-denominated sizing, conviction bands + whale-ape rule.
-  // 65–74 → 0.2 SOL · 75–84 → 0.35 SOL · 85+ → 0.5 SOL.
-  // Whale: MC > $500k + turnover ≥ 1.0 → 2.5 SOL (overrides bands).
-  solSizeBase: 0.2,
-  solSizeMid: 0.35,
-  solSizeTop: 0.5,
+  // v3.9: user's sizing — NO small trades. Minimum 1 SOL per entry.
+  // 65–74 → 1.0 SOL · 75–84 → 1.5 SOL · 85+ → 2.0 SOL.
+  // Early (<$100k + 80+) → 1.5 SOL · Whale ($500k–$1M + turnover) → 2.5 SOL.
+  maxPositions: 5,
+  solSizeBase: 1.0,
+  solSizeMid: 1.5,
+  solSizeTop: 2.0,
   whaleMcUsd: 500000,
   whaleTurnoverMin: 1.0,
   whaleSolSize: 2.5,
-  // Early-ape: under $100k MC + score ≥ 80 → 1 SOL conviction size.
+  // Early-ape: under $100k MC + score ≥ 80 → 1.5 SOL conviction size.
   earlyMcUsd: 100000,
   earlyMinScore: 80,
-  earlySolSize: 1.0,
+  earlySolSize: 1.5,
   takeProfit: 0.30,
   stopLoss: 0.15,
   trailingStop: 0.12,

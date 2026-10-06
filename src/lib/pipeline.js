@@ -117,7 +117,10 @@ export function freeKill(t, cfg) {
   if (t.mintAuthOpen === true) return 'mint authority OPEN · dev can mint';
   if (t.freezeAuthOpen === true) return 'freeze authority OPEN · dev can freeze';
   const liq = t.liquidity || 0;
-  if (!(liq >= cfg.minLiquidityUsd)) return `liq ${fmtUsd(liq)} < ${fmtUsd(cfg.minLiquidityUsd)} floor`;
+  // On-curve pump.fun coins report $0 DEX liquidity — the bonding curve IS
+  // their liquidity (always sellable into the curve). Gate those on volume
+  // instead; keep the LP floor for graduated coins with real DEX pools.
+  if (t.graduated && !(liq >= cfg.minLiquidityUsd)) return `liq ${fmtUsd(liq)} < ${fmtUsd(cfg.minLiquidityUsd)} floor`;
   const vol = t.vol24h || 0;
   if (!(vol >= cfg.minVol24hUsd)) return `vol24h ${fmtUsd(vol)} < ${fmtUsd(cfg.minVol24hUsd)} floor`;
   const mc = t.mc || 0;

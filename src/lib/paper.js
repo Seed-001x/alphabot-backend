@@ -25,7 +25,7 @@ export function freshPortfolio(bankroll0, bankrollSol) {
     signals: [],
     cooldowns: {},
     createdAt: Date.now(),
-    version: 4,   // v3.8: 5-SOL bankroll — fresh paper portfolio
+    version: 5,   // v3.9: 1M cap + min-1-SOL sizing + new-coin kill chain — fresh paper portfolio
   };
 }
 
@@ -44,13 +44,13 @@ export async function initPortfolio(cfg) {
       const { rows } = await pool.query('SELECT state FROM ab_desk_state WHERE id = 1');
       if (rows.length && rows[0].state && Array.isArray(rows[0].state.positions)) {
         // v3.8: version gate — old sizing/bankroll regimes don't carry over.
-        if (rows[0].state.version === 4) {
+        if (rows[0].state.version === 5) {
           P = rows[0].state;
           hydrated = true;
           console.log(`[paper] portfolio restored: $${(P.cash || 0).toFixed(0)} cash, ${(P.positions || []).length} open, ${(P.closed || []).length} closed`);
           return P;
         }
-        console.log(`[paper] portfolio version ${rows[0].state.version || '?'} → resetting to v4 (5-SOL bankroll)`);
+        console.log(`[paper] portfolio version ${rows[0].state.version || '?'} → resetting to v5 (1M cap + min-1-SOL sizing)`);
       }
     } catch (e) {
       console.error('[paper] restore failed:', e.message);
