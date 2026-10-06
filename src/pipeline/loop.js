@@ -3,8 +3,8 @@
 // 20s price tick (RISK exits), slow kill-confirmation pass, and the
 // smart-flow watcher (Helius). Paper money only. Fail-open everywhere.
 
-import { loadConfig } from '../lib/config.js';
-import { initStorage, storage } from '../lib/storage.js';
+import { loadConfig, applyAggressive } from '../lib/config.js';
+import { initStorage, storage, kvGetJson, kvSetJson } from '../lib/storage.js';
 import { scanTokens, vetToken, scoreToken, heatOf } from '../lib/pipeline.js';
 import { researchToken } from '../lib/research.js';
 import { judgeToken, getJudgeStats } from '../lib/aiJudge.js';
@@ -141,7 +141,7 @@ async function scanCycle() {
     let judged = 0;
     for (const item of Q.research.drain(RESEARCH_PER_CYCLE)) {
       try {
-        const research = await researchToken(item, item.dossier);
+        const research = await researchToken(item, item.dossier, cfg);
         let judgeMod = 0, judgeLine = null;
         if (judged < JUDGE_PER_CYCLE) {
           const j = await judgeToken(item, item.dossier, research);
@@ -228,6 +228,7 @@ export function getStateSnapshot() {
       maxHoldHours: cfg.maxHoldHours,
       solSizeBase: cfg.solSizeBase, solSizeMid: cfg.solSizeMid, solSizeTop: cfg.solSizeTop,
       maxPositions: cfg.maxPositions,
+      aggressiveMode: !!cfg.aggressiveMode, pumpMinMc: cfg.pumpMinMc,
     } : null,
     portfolio: p ? {
       bankroll0: p.bankroll0, cash: p.cash,
@@ -262,6 +263,13 @@ export async function startLoop() {
   cfg = loadConfig();
   console.log('[loop] config loaded (scalp retune): TP', cfg.takeProfit, 'SL', cfg.stopLoss, 'trail', cfg.trailingStop, 'maxHold', cfg.maxHoldHours + 'h');
   await initStorage();
+  // v3.18: restore aggressive mode from KV (survives restarts).
+  try {
+    const saved = await kvGetJson('ab_aggressive', null);
+    if (saved && saved.on) applyAggressive(cfg, true);
+    else if (cfg.aggressiveMode) applyAggressive(cfg, true);
+  } catch {}
+  console.log('[loop] aggressive mode:', cfg.aggressiveMode ? 'ON' : 'off');
   await initLearning();
   await initPortfolio(cfg);
   probePumpPortal();
@@ -275,4 +283,31 @@ export async function startLoop() {
   priceTick().catch(() => {});
   setInterval(() => { priceTick().catch(() => {}); }, Math.max(10, cfg.priceIntervalSec) * 1000);
   console.log('[loop] started — scan every', cfg.scanIntervalSec + 's, price tick every', cfg.priceIntervalSec + 's');
+}
+
+// v3.18: aggressive mode runtime toggle. Mutates the live cfg and persists
+// to KV so it survives restarts. Called by POST /api/mode.
+export async function setAggressiveMode(on) {
+  on = !!on;
+  if (!cfg) cfg = loadConfig();
+  if (on) {
+    applyAggressive(cfg, true);
+  } else {
+    const fresh = loadConfig();
+    // restore non-aggressive values for the overridden keys
+    cfg.aggressiveMode = false;
+    cfg.minTokenScore = fresh.minTokenScore;
+    cfg.pumpMinMc = fresh.pumpMinMc;
+    cfg.cooldownMin = fresh.cooldownMin;
+    delete cfg.skipRugKill;
+    delete cfg.skipSocialCheck;
+    delete cfg.skipMintFreezeKill;
+  }
+  try { await kvSetJson('ab_aggressive', { on, ts: Date.now() }); } catch {}
+  console.log('[loop] aggressive mode:', on ? 'ON' : 'off');
+  return { aggressiveMode: cfg.aggressiveMode, minTokenScore: cfg.minTokenScore, pumpMinMc: cfg.pumpMinMc };
+}
+
+export function isAggressive() {
+  return !!(cfg && cfg.aggressiveMode);
 }

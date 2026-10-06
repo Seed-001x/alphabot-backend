@@ -11,6 +11,7 @@ import { calloutCheck } from './callouts.js';
 import { floorEmit } from './events.js';
 import { storage } from './storage.js';
 import { accumulationSignal, ignitionSignal } from './feeds.js';
+import { AGGRESSIVE_IGNITION_BONUS } from './config.js';
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
@@ -165,7 +166,7 @@ function keywordVerdict(text) {
 }
 
 // ---------------------------------------------------------- main entry
-async function researchInner(t, dossier) {
+async function researchInner(t, dossier, cfg) {
   const deadline = Date.now() + TOTAL_MS;
   const bits = [];
   let modifier = 0;
@@ -299,9 +300,11 @@ async function researchInner(t, dossier) {
   if (Date.now() < deadline) {
     try {
       const ig = ignitionSignal(t.address, t);
+      // v3.18: aggressive mode — ignition hits harder (catch the runners).
+      const igBonus = cfg && cfg.aggressiveMode ? AGGRESSIVE_IGNITION_BONUS : 0;
       if (ig && ig.ignition) {
-        modifier += 8;
-        bits.push(`ignition +8 · vol ×${ig.spike.toFixed(1)} in one cycle, mc $${Math.round(t.mc / 1000)}k — before the pump`);
+        modifier += 8 + igBonus;
+        bits.push(`ignition +${8 + igBonus} · vol ×${ig.spike.toFixed(1)} in one cycle, mc $${Math.round(t.mc / 1000)}k — before the pump`);
       } else if (ig && ig.gradRun) {
         modifier += 6;
         bits.push(`graduation run +6 · curve ${Math.round(t.curvePct)}% + vol ×${ig.spike.toFixed(1)} — high-probability runner`);
@@ -314,9 +317,9 @@ async function researchInner(t, dossier) {
   return { modifier, line: bits.join(' · '), checks: bits.length, calloutLine };
 }
 
-export async function researchToken(t, dossier) {
+export async function researchToken(t, dossier, cfg) {
   try {
-    return await withTimeout(researchInner(t, dossier), TOTAL_MS);
+    return await withTimeout(researchInner(t, dossier, cfg), TOTAL_MS);
   } catch {
     floorEmit('research.done', { mint: t.address, symbol: t.symbol, name: t.name, modifier: 0, line: 'no data' });
     return { modifier: 0, line: 'no data', checks: 0, calloutLine: null };

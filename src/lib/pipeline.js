@@ -10,6 +10,7 @@ import {
   curveProgress, isOnCurve, PUMP_SUFFIX,
 } from './pumpfun.js';
 import { buildFeeds, momentumScore } from './feeds.js';
+import { AGGRESSIVE_MOMENTUM_WEIGHT } from './config.js';
 import { getAdaptiveWeights } from './learning.js';
 import { getPumpPortalMints, probePumpPortal } from './pumpportal.js';
 import { STABLE_MINTS } from './helius.js';
@@ -129,8 +130,11 @@ export function freeKill(t, cfg) {
   if (ageMs > maxAgeMs) return t.graduated
     ? `age ${(ageMs / 864e5).toFixed(1)}d > ${cfg.maxAgeDays}d max`
     : `age ${(ageMs / 3600000).toFixed(1)}h > ${cfg.maxPumpAgeHrs}h pump max`;
-  if (t.mintAuthOpen === true) return 'mint authority OPEN · dev can mint';
-  if (t.freezeAuthOpen === true) return 'freeze authority OPEN · dev can freeze';
+  // v3.18: aggressive mode skips mint/freeze kills — paper money can afford the lesson.
+  if (!cfg.skipMintFreezeKill) {
+    if (t.mintAuthOpen === true) return 'mint authority OPEN · dev can mint';
+    if (t.freezeAuthOpen === true) return 'freeze authority OPEN · dev can freeze';
+  }
   const liq = t.liquidity || 0;
   // On-curve pump.fun coins report $0 DEX liquidity — the bonding curve IS
   // their liquidity (always sellable into the curve). Gate those on volume
@@ -142,8 +146,8 @@ export function freeKill(t, cfg) {
     if (!(vol >= cfg.minVol24hUsd)) return `vol24h ${fmtUsd(vol)} < ${fmtUsd(cfg.minVol24hUsd)} floor`;
   }
   // v3.17: social link required — kills random dev extract launches with no
-  // twitter/website/telegram attached.
-  if (!t.twitter && !t.website && !t.telegram) return 'no socials · dev extract risk';
+  // twitter/website/telegram attached. v3.18: skipped in aggressive mode.
+  if (!cfg.skipSocialCheck && !t.twitter && !t.website && !t.telegram) return 'no socials · dev extract risk';
   const mc = t.mc || 0;
   const lo = t.graduated ? cfg.minMc : cfg.pumpMinMc;
   const hi = t.graduated ? cfg.maxMc : cfg.pumpMaxMc;
@@ -163,6 +167,8 @@ export function tradeKill(t, cfg) {
 }
 
 export async function rugKill(t, cfg) {
+  // v3.18: aggressive mode skips rug kills entirely — let it get rugged and learn.
+  if (cfg.skipRugKill) return { reason: null, dossier: null };
   const dossier = await fetchRugReport(t.address);
   // v3.10 parity: no dossier → flows to scoring (all dossier reads are
   // null-safe) instead of killing. Holder-count floor dropped — concentration
@@ -222,7 +228,9 @@ export function scoreToken(t, dossier, cfg) {
     age = ageH <= 6 ? 70 + 30 * (ageH / 6) : clamp(100 - ((ageH - 6) / Math.max(maxH - 6, 1)) * 100, 0, 100);
   }
   const momentum = momentumScore(t);
-  const { weights: W, adapted } = getAdaptiveWeights(SCORE_WEIGHTS);
+  const { weights: W0, adapted } = getAdaptiveWeights(SCORE_WEIGHTS);
+  // v3.18: aggressive mode — momentum matters more (catch the runners).
+  const W = cfg.aggressiveMode ? { ...W0, momentum: AGGRESSIVE_MOMENTUM_WEIGHT } : W0;
   const parts = { liquidity, holders, buyPressure, curve, age, momentum };
   let num = 0, den = 0;
   for (const k of Object.keys(W)) {

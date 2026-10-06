@@ -4,7 +4,7 @@
 
 import express from 'express';
 import { pool, hasDb } from '../db/pool.js';
-import { startLoop, getStateSnapshot, getClosedTrades, cycleStats } from '../pipeline/loop.js';
+import { startLoop, getStateSnapshot, getClosedTrades, cycleStats, setAggressiveMode, isAggressive } from '../pipeline/loop.js';
 import { getBrainStats, resetLearning } from '../lib/learning.js';
 import { getExitRules } from '../lib/exits.js';
 import { loadConfig } from '../lib/config.js';
@@ -60,6 +60,18 @@ app.get('/health', async (req, res) => {
 // stats, feeds, brain, events, queues, cycle counters.
 app.get('/api/state', async (req, res) => {
   res.json(getStateSnapshot());
+});
+
+// Aggressive mode toggle (v3.18). POST {on: true/false} — flips the live
+// config, persists to KV. The frontend calls this from the AGGRESSIVE button.
+app.post('/api/mode', async (req, res) => {
+  try {
+    const on = !!(req.body && req.body.on);
+    const out = await setAggressiveMode(on);
+    res.json({ ok: true, ts: Date.now(), ...out });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e && e.message || e) });
+  }
 });
 
 // Closed paper trades, newest first.
