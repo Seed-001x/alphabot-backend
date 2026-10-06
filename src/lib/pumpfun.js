@@ -163,6 +163,8 @@ export function curveProgress(mc) {
   return Math.min(100, (mc / PUMP_GRAD_MC) * 100);
 }
 
+// DexScreener labels pump.fun's bonding-curve venue as dexId "pumpfun"
+// (not "pump") — match both so on-curve coins aren't misread as graduated.
 export function isOnCurve(pair) {
-  return pair && pair.dexId === 'pump';
+  return !!pair && (pair.dexId === 'pumpfun' || pair.dexId === 'pump');
 }
