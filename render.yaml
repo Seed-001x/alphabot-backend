@@ -1,0 +1,22 @@
+# Render Blueprint — ALPHABOT backend.
+# One-click deploy: Render dashboard → New → Blueprint → connect this repo.
+# Free plan sleeps when idle. For 24/7 scanning, upgrade the service to
+# Starter ($7/mo) — one click in the dashboard, no code change.
+services:
+  - type: web
+    name: alphabot-backend
+    runtime: node
+    plan: free
+    region: ohio
+    repo: https://github.com/Seed-001x/alphabot-backend
+    branch: main
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      # The user adds these three in the Render dashboard (never in chat):
+      # - DATABASE_URL  (Render Postgres, internal URL)
+      # - HELIUS_API_KEY (optional — wakes the smart-flow watcher)
+      # - OPENAI_API_KEY (optional — wakes the AI judge)
