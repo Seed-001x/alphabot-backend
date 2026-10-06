@@ -10,7 +10,7 @@ import { researchToken } from '../lib/research.js';
 import { judgeToken, getJudgeStats } from '../lib/aiJudge.js';
 import { warmCalloutCache } from '../lib/callouts.js';
 import { Q, queueStats } from '../lib/queues.js';
-import { fetchTokens } from '../lib/dexscreener.js';
+import { fetchTokens, solPrice } from '../lib/dexscreener.js';
 import { ELITE } from '../lib/elite.js';
 import { getKey as heliusKey, fetchWalletTxns, parseSwaps } from '../lib/helius.js';
 import {
@@ -133,6 +133,9 @@ async function scanCycle() {
 
     // RESEARCH + JUDGE + final scoring (slow, few per cycle).
     const elite = await refreshElite();
+    // SOL price once per cycle for SOL-denominated sizing (cached 2m server-side).
+    let spx = null;
+    try { spx = await solPrice(); } catch { spx = null; }
     let judged = 0;
     for (const item of Q.research.drain(RESEARCH_PER_CYCLE)) {
       try {
@@ -156,7 +159,7 @@ async function scanCycle() {
           adapted: adapted || item.adapted,
         };
         cycleStats.scored++;
-        const { entered } = processResult(p, r, cfg, { silent: false });
+        const { entered } = processResult(p, r, cfg, { silent: false, solPrice: spx });
         if (entered) cycleStats.entries++;
       } catch { cycleStats.errors++; }
     }
@@ -218,7 +221,10 @@ export function getStateSnapshot() {
     config: cfg ? {
       minTokenScore: cfg.minTokenScore, takeProfit: cfg.takeProfit,
       stopLoss: cfg.stopLoss, trailingStop: cfg.trailingStop,
-      maxHoldHours: cfg.maxHoldHours, positionPct: cfg.positionPct,
+      maxHoldHours: cfg.maxHoldHours,
+      solSizeBase: cfg.solSizeBase, solSizeMid: cfg.solSizeMid, solSizeTop: cfg.solSizeTop,
+      whaleMcUsd: cfg.whaleMcUsd, whaleTurnoverMin: cfg.whaleTurnoverMin, whaleSolSize: cfg.whaleSolSize,
+      earlyMcUsd: cfg.earlyMcUsd, earlyMinScore: cfg.earlyMinScore, earlySolSize: cfg.earlySolSize,
       maxPositions: cfg.maxPositions,
     } : null,
     portfolio: p ? {

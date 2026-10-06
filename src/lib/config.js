@@ -3,7 +3,7 @@
 // Server owns the config; a few knobs are env-overridable.
 
 export const DEFAULT_CONFIG = {
-  bankroll0: 1000,
+  bankroll0: 10000,   // v3.8: bigger virtual bankroll for SOL-denominated sizing
   minTokenScore: 65,
   minLiquidityUsd: 3000,
   minVol24hUsd: 10000,
@@ -23,7 +23,19 @@ export const DEFAULT_CONFIG = {
   eliteBoost: 8,
   // --- TRADE (paper risk engine, v3.6 scalp retune) ---
   maxPositions: 8,
-  positionPct: 0.02,
+  // v3.8: SOL-denominated sizing, conviction bands + whale-ape rule.
+  // 65–74 → 0.2 SOL · 75–84 → 0.35 SOL · 85+ → 0.5 SOL.
+  // Whale: MC > $500k + turnover ≥ 1.0 → 2.5 SOL (overrides bands).
+  solSizeBase: 0.2,
+  solSizeMid: 0.35,
+  solSizeTop: 0.5,
+  whaleMcUsd: 500000,
+  whaleTurnoverMin: 1.0,
+  whaleSolSize: 2.5,
+  // Early-ape: under $100k MC + score ≥ 80 → 1 SOL conviction size.
+  earlyMcUsd: 100000,
+  earlyMinScore: 80,
+  earlySolSize: 1.0,
   takeProfit: 0.30,
   stopLoss: 0.15,
   trailingStop: 0.12,

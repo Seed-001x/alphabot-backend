@@ -23,7 +23,7 @@ export function freshPortfolio(bankroll0) {
     signals: [],
     cooldowns: {},
     createdAt: Date.now(),
-    version: 2,
+    version: 3,   // v3.8: SOL-denominated sizing — fresh paper portfolio
   };
 }
 
@@ -41,10 +41,14 @@ export async function initPortfolio(cfg) {
     try {
       const { rows } = await pool.query('SELECT state FROM ab_desk_state WHERE id = 1');
       if (rows.length && rows[0].state && Array.isArray(rows[0].state.positions)) {
-        P = rows[0].state;
-        hydrated = true;
-        console.log(`[paper] portfolio restored: $${(P.cash || 0).toFixed(0)} cash, ${(P.positions || []).length} open, ${(P.closed || []).length} closed`);
-        return P;
+        // v3.8: version gate — old sizing regimes (v2: 2%-of-cash) don't carry over.
+        if (rows[0].state.version === 3) {
+          P = rows[0].state;
+          hydrated = true;
+          console.log(`[paper] portfolio restored: $${(P.cash || 0).toFixed(0)} cash, ${(P.positions || []).length} open, ${(P.closed || []).length} closed`);
+          return P;
+        }
+        console.log(`[paper] portfolio version ${rows[0].state.version || '?'} → resetting to v3 (new sizing regime)`);
       }
     } catch (e) {
       console.error('[paper] restore failed:', e.message);
@@ -119,7 +123,22 @@ export function processResult(p, r, cfg, opts = {}) {
   if (cd && now - cd < cfg.cooldownMin * 60000)
     return gate(`cooldown — ${fmtDur(cfg.cooldownMin * 60000 - (now - cd))} left`);
 
-  const sizeUsd = Math.min(p.cash, p.cash * cfg.positionPct);
+  // v3.8: SOL-denominated sizing. Whale-ape rule first (MC > $500k + high
+  // volume → 2.5 SOL), then conviction bands by score. USD accounting stays;
+  // SOL price arrives via opts (fetched once per cycle, cached).
+  const spx = (opts && opts.solPrice) || 150;
+  const turnover = (t.vol24h && t.mc) ? t.vol24h / t.mc : 0;
+  let solSize;
+  if (t.mc > (cfg.whaleMcUsd || 500000) && turnover >= (cfg.whaleTurnoverMin || 1.0)) {
+    solSize = cfg.whaleSolSize || 2.5;
+  } else if (t.mc < (cfg.earlyMcUsd || 100000) && finalScore >= (cfg.earlyMinScore || 80)) {
+    solSize = cfg.earlySolSize || 1.0;   // early + strong score → conviction ape
+  } else {
+    solSize = finalScore >= 85 ? cfg.solSizeTop
+      : finalScore >= 75 ? cfg.solSizeMid : cfg.solSizeBase;
+  }
+  solSize = solSize || 0.2;
+  const sizeUsd = Math.min(p.cash, solSize * spx);
   if (!(sizeUsd > 1)) return gate(`cash too low (${fmtUsd(p.cash)})`);
   if (!(t.price > 0)) return gate('no price');
 
@@ -130,7 +149,7 @@ export function processResult(p, r, cfg, opts = {}) {
   const pos = {
     mint: t.address, symbol: t.symbol, name: t.name,
     entryMc, entryPrice, entryTs: now,
-    sizeUsd, tokens, peakMultiple: 1,
+    sizeUsd, solSize, tokens, peakMultiple: 1,
     score: finalScore, eliteHit: !!r.eliteHit, flowTag: !!r.flowTag,
     feeds: t.feeds || null,
     buyPressure: (r.breakdown && r.breakdown.buyPressure) || null,
@@ -148,7 +167,7 @@ export function processResult(p, r, cfg, opts = {}) {
     if (t.creator) noteCreatorLaunchCount(t.creator, 1);
   } catch { /* journal is a nicety */ }
   sig.taken = true;
-  sig.reason = `ENTER ${t.symbol} · score ${finalScore}${researchMod ? ` (${researchMod >= 0 ? '+' : ''}${researchMod} research)` : ''}${r.eliteHit ? ` (+${boost} smart flow)` : ''} · ${fmtUsd(sizeUsd)} @ ${fmtUsd(entryMc)} MC`;
+  sig.reason = `ENTER ${t.symbol} · score ${finalScore}${researchMod ? ` (${researchMod >= 0 ? '+' : ''}${researchMod} research)` : ''}${r.eliteHit ? ` (+${boost} smart flow)` : ''} · ${solSize.toFixed(2)} SOL (${fmtUsd(sizeUsd)}) @ ${fmtUsd(entryMc)} MC`;
   floorEmit('trade.enter', {
     mint: t.address, symbol: t.symbol, name: t.name,
     score: finalScore, sizeUsd, entryMc, researchMod,
