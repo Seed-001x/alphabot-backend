@@ -25,7 +25,7 @@ export function freshPortfolio(bankroll0, bankrollSol) {
     signals: [],
     cooldowns: {},
     createdAt: Date.now(),
-    version: 5,   // v3.9: 1M cap + min-1-SOL sizing + new-coin kill chain — fresh paper portfolio
+    version: 6,   // v3.12: sub-$100k universe — fresh paper portfolio
   };
 }
 
@@ -44,13 +44,13 @@ export async function initPortfolio(cfg) {
       const { rows } = await pool.query('SELECT state FROM ab_desk_state WHERE id = 1');
       if (rows.length && rows[0].state && Array.isArray(rows[0].state.positions)) {
         // v3.8: version gate — old sizing/bankroll regimes don't carry over.
-        if (rows[0].state.version === 5) {
+        if (rows[0].state.version === 6) {
           P = rows[0].state;
           hydrated = true;
           console.log(`[paper] portfolio restored: $${(P.cash || 0).toFixed(0)} cash, ${(P.positions || []).length} open, ${(P.closed || []).length} closed`);
           return P;
         }
-        console.log(`[paper] portfolio version ${rows[0].state.version || '?'} → resetting to v5 (1M cap + min-1-SOL sizing)`);
+        console.log(`[paper] portfolio version ${rows[0].state.version || '?'} → resetting to v6 (sub-$100k universe)`);
       }
     } catch (e) {
       console.error('[paper] restore failed:', e.message);
@@ -132,21 +132,15 @@ export function processResult(p, r, cfg, opts = {}) {
   if (cd && now - cd < cfg.cooldownMin * 60000)
     return gate(`cooldown — ${fmtDur(cfg.cooldownMin * 60000 - (now - cd))} left`);
 
-  // v3.8: SOL-denominated sizing. Whale-ape rule first (MC > $500k + high
-  // volume → 2.5 SOL), then conviction bands by score. USD accounting stays;
-  // SOL price arrives via opts (fetched once per cycle, cached).
+  // v3.12: SOL-denominated sizing for the sub-$100k universe.
+  // Score bands only (whale rule retired — nothing over $100k can enter).
+  // 55–74 → 1.0 SOL · 75–84 → 1.5 SOL · 85+ → 2.0 SOL.
   const spx = (opts && opts.solPrice) || 150;
-  const turnover = (t.vol24h && t.mc) ? t.vol24h / t.mc : 0;
   let solSize;
-  if (t.mc > (cfg.whaleMcUsd || 500000) && turnover >= (cfg.whaleTurnoverMin || 1.0)) {
-    solSize = cfg.whaleSolSize || 2.5;
-  } else if (t.mc < (cfg.earlyMcUsd || 100000) && finalScore >= (cfg.earlyMinScore || 80)) {
-    solSize = cfg.earlySolSize || 1.0;   // early + strong score → conviction ape
-  } else {
-    solSize = finalScore >= 85 ? cfg.solSizeTop
-      : finalScore >= 75 ? cfg.solSizeMid : cfg.solSizeBase;
-  }
-  solSize = solSize || 0.2;
+  if (finalScore >= 85) solSize = cfg.solSizeTop;
+  else if (finalScore >= 75) solSize = cfg.solSizeMid;
+  else solSize = cfg.solSizeBase;
+  solSize = solSize || 1.0;
   const sizeUsd = Math.min(p.cash, solSize * spx);
   if (!(sizeUsd > 1)) return gate(`cash too low (${fmtUsd(p.cash)})`);
   if (!(t.price > 0)) return gate('no price');

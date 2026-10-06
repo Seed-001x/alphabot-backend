@@ -227,8 +227,6 @@ export function getStateSnapshot() {
       maxMc: cfg.maxMc, pumpMaxMc: cfg.pumpMaxMc, minAgeMin: cfg.minAgeMin,
       maxHoldHours: cfg.maxHoldHours,
       solSizeBase: cfg.solSizeBase, solSizeMid: cfg.solSizeMid, solSizeTop: cfg.solSizeTop,
-      whaleMcUsd: cfg.whaleMcUsd, whaleTurnoverMin: cfg.whaleTurnoverMin, whaleSolSize: cfg.whaleSolSize,
-      earlyMcUsd: cfg.earlyMcUsd, earlyMinScore: cfg.earlyMinScore, earlySolSize: cfg.earlySolSize,
       maxPositions: cfg.maxPositions,
     } : null,
     portfolio: p ? {

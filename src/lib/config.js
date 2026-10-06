@@ -10,9 +10,9 @@ export const DEFAULT_CONFIG = {
   minVol24hUsd: 2500,      // v3.10: wider net — was 5000
   pumpMinMc: 20000,     // user's spec: $20k min MC IS the newness filter —
   // a coin at $20k+ already proved it has buyers; never kill for being young
-  pumpMaxMc: 1000000,   // user's spec: scan under $1M — hard ceiling
+  pumpMaxMc: 100000,   // v3.12: sub-$100k universe — hard ceiling
   minMc: 50000,
-  maxMc: 1000000,      // user's spec: scan under $1M — hard ceiling (was $30M)
+  maxMc: 100000,      // v3.12: sub-$100k universe — hard ceiling
   // v3.9: kill chain retuned for the NEW-COIN game (20k–1M MC pump.fun coins
   // with volume). NO minimum age — newborns are vetted on merit (MC, volume,
   // holders, buys), never killed for being young.
@@ -27,17 +27,14 @@ export const DEFAULT_CONFIG = {
   maxTop10Pct: 70,
   eliteBoost: 8,
   // --- TRADE (paper risk engine, v3.6 scalp retune) ---
-  // v3.9: user's sizing — NO small trades. Minimum 1 SOL per entry.
-  // 65–74 → 1.0 SOL · 75–84 → 1.5 SOL · 85+ → 2.0 SOL.
-  // Early (<$100k + 80+) → 1.5 SOL · Whale ($500k–$1M + turnover) → 2.5 SOL.
+  // v3.12: sub-$100k universe. Score bands only — no small trades, min 1 SOL.
+  // 55–74 → 1.0 SOL · 75–84 → 1.5 SOL · 85+ → 2.0 SOL.
   maxPositions: 5,
   solSizeBase: 1.0,
   solSizeMid: 1.5,
   solSizeTop: 2.0,
-  whaleMcUsd: 500000,
-  whaleTurnoverMin: 1.0,
-  whaleSolSize: 2.5,
   // Early-ape: under $100k MC + score ≥ 80 → 1.5 SOL conviction size.
+  // (Universe is now sub-$100k, so this overlaps the bands — kept for tuning.)
   earlyMcUsd: 100000,
   earlyMinScore: 80,
   earlySolSize: 1.5,
