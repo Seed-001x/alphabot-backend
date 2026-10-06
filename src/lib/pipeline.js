@@ -135,7 +135,9 @@ export function freeKill(t, cfg) {
 
 export function tradeKill(t, cfg) {
   const buys = t.buys24h, sells = t.sells24h;
-  if (buys == null || sells == null) return 'trade counts unknown';
+  // v3.10 parity: unknown trade counts flow to scoring (buyPressure goes
+  // null and renormalizes out) instead of killing.
+  if (buys == null || sells == null) return null;
   if (!(buys >= cfg.minBuys24h)) return `buys24h ${buys} < ${cfg.minBuys24h} floor`;
   if (cfg.requireSells && !(sells > 0)) return 'sells24h = 0 · no exit evidence';
   return null;
@@ -143,7 +145,10 @@ export function tradeKill(t, cfg) {
 
 export async function rugKill(t, cfg) {
   const dossier = await fetchRugReport(t.address);
-  if (!dossier) return { reason: 'rug dossier unavailable', dossier: null };
+  // v3.10 parity: no dossier → flows to scoring (all dossier reads are
+  // null-safe) instead of killing. Holder-count floor dropped — concentration
+  // is punished in the score's holders component.
+  if (!dossier) return { reason: null, dossier: null };
   if (dossier.rugged) return { reason: 'RugCheck flags RUGGED', dossier };
   if (dossier.devPct != null && dossier.devPct > cfg.maxDevPct)
     return { reason: `dev holds ${dossier.devPct.toFixed(1)}% > ${cfg.maxDevPct}% cap`, dossier };
@@ -151,8 +156,6 @@ export async function rugKill(t, cfg) {
     return { reason: `top holder ${dossier.topPct.toFixed(1)}% > ${cfg.maxTopHolderPct}% cap`, dossier };
   if (dossier.top10Pct != null && dossier.top10Pct > cfg.maxTop10Pct)
     return { reason: `top-10 ${dossier.top10Pct.toFixed(1)}% > ${cfg.maxTop10Pct}% cap`, dossier };
-  if (dossier.holderCount != null && dossier.holderCount < cfg.minHolders)
-    return { reason: `holders ${dossier.holderCount} < ${cfg.minHolders} floor · thin`, dossier };
   return { reason: null, dossier };
 }
 
