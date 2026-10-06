@@ -14,13 +14,16 @@ if (!hasDb) {
 }
 
 async function ensureMigrationsTable() {
+  // Namespaced tracking table — the shared Postgres hosts several apps, and
+  // a generic `schema_migrations` name collides with their migration records
+  // (a foreign `000_base_schema` row once caused our schema to be skipped).
   await pool.query(
-    'CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW())'
+    'CREATE TABLE IF NOT EXISTS ab_schema_migrations (name TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW())'
   );
 }
 
 async function applyOnce(name, sql) {
-  const { rows } = await pool.query('SELECT 1 FROM schema_migrations WHERE name = $1', [name]);
+  const { rows } = await pool.query('SELECT 1 FROM ab_schema_migrations WHERE name = $1', [name]);
   if (rows.length) {
     console.log(`[db] ${name} — already applied, skipping`);
     return;
@@ -29,7 +32,7 @@ async function applyOnce(name, sql) {
   try {
     await client.query('BEGIN');
     await client.query(sql);
-    await client.query('INSERT INTO schema_migrations (name) VALUES ($1)', [name]);
+    await client.query('INSERT INTO ab_schema_migrations (name) VALUES ($1)', [name]);
     await client.query('COMMIT');
     console.log(`[db] ${name} — applied`);
   } catch (err) {
