@@ -78,9 +78,19 @@ export async function scanTokens() {
     const chainOk = !pair || !pair.chainId || pair.chainId === 'solana';
     if (!isPumpOrigin(a, pair) && !(fromFeed && chainOk)) continue;
     if (STABLE_MINTS.has(a)) continue;
-    const t = enriched.get(a);
-    if (!t || !t.price || !t.mc) continue;
+    const t0 = enriched.get(a);
     const m = meta.get(a) || {};
+    // v3.17: pump.fun fallback — DexScreener hasn't indexed fresh coins yet,
+    // but pump.fun's own API reports live usd_market_cap. Use it instead of
+    // dropping them. Volume floor is skipped for these (a 10-min-old coin has
+    // no meaningful 24h volume — its MC IS the buying evidence).
+    let t = t0;
+    if (!t0 || !t0.price || !t0.mc) {
+      const pfMc = m.usdMc;
+      if (!pfMc || pfMc <= 0) continue;
+      t = { address: a, symbol: m.symbol || '???', name: m.name || 'Unknown', mc: pfMc, price: null, vol24h: null, buys24h: null, sells24h: null, liquidity: 0, _pfFallback: true };
+    }
+    if (!t || !t.mc) continue;
     const graduated = !isOnCurve(pair);
     const turnover = t.vol24h && t.mc ? t.vol24h / t.mc : 0;
     const mv = movers.get(a);
@@ -88,6 +98,9 @@ export async function scanTokens() {
       ...t,
       source: m.source || 'pump',
       creator: m.creator || t.creator || null,
+      twitter: m.twitter || t.twitter || null,
+      website: m.website || t.website || null,
+      telegram: m.telegram || t.telegram || null,
       mintAuthOpen: m.mintAuthOpen != null ? m.mintAuthOpen : null,
       freezeAuthOpen: m.freezeAuthOpen != null ? m.freezeAuthOpen : null,
       createdAt: m.createdAt || t.createdAt,
@@ -123,8 +136,14 @@ export function freeKill(t, cfg) {
   // their liquidity (always sellable into the curve). Gate those on volume
   // instead; keep the LP floor for graduated coins with real DEX pools.
   if (t.graduated && !(liq >= cfg.minLiquidityUsd)) return `liq ${fmtUsd(liq)} < ${fmtUsd(cfg.minLiquidityUsd)} floor`;
-  const vol = t.vol24h || 0;
-  if (!(vol >= cfg.minVol24hUsd)) return `vol24h ${fmtUsd(vol)} < ${fmtUsd(cfg.minVol24hUsd)} floor`;
+  // v3.17: skip volume floor for pump.fun-fallback coins (too new for 24h vol).
+  if (!t._pfFallback) {
+    const vol = t.vol24h || 0;
+    if (!(vol >= cfg.minVol24hUsd)) return `vol24h ${fmtUsd(vol)} < ${fmtUsd(cfg.minVol24hUsd)} floor`;
+  }
+  // v3.17: social link required — kills random dev extract launches with no
+  // twitter/website/telegram attached.
+  if (!t.twitter && !t.website && !t.telegram) return 'no socials · dev extract risk';
   const mc = t.mc || 0;
   const lo = t.graduated ? cfg.minMc : cfg.pumpMinMc;
   const hi = t.graduated ? cfg.maxMc : cfg.pumpMaxMc;
