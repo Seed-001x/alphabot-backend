@@ -109,7 +109,9 @@ export async function scanTokens() {
 export function freeKill(t, cfg) {
   const ageMs = t.createdAt ? Date.now() - t.createdAt : null;
   if (ageMs == null) return 'age unknown';
-  if (ageMs < cfg.minAgeMin * 60000) return `age ${Math.max(1, Math.round(ageMs / 60000))}m < ${cfg.minAgeMin}m floor`;
+  // No minimum age: the $20k MC floor is the newness filter. Newborns are
+  // vetted on merit, never killed for being young.
+  if (cfg.minAgeMin > 0 && ageMs < cfg.minAgeMin * 60000) return `age ${Math.max(1, Math.round(ageMs / 60000))}m < ${cfg.minAgeMin}m floor`;
   const maxAgeMs = t.graduated ? cfg.maxAgeDays * 864e5 : cfg.maxPumpAgeHrs * 3600000;
   if (ageMs > maxAgeMs) return t.graduated
     ? `age ${(ageMs / 864e5).toFixed(1)}d > ${cfg.maxAgeDays}d max`

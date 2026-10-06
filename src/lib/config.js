@@ -8,14 +8,15 @@ export const DEFAULT_CONFIG = {
   minTokenScore: 65,
   minLiquidityUsd: 2000,   // was 3000 — on-curve liquidity reads low for young coins
   minVol24hUsd: 5000,      // was 10000 — "with volume" for a young coin is lower
-  pumpMinMc: 5000,
+  pumpMinMc: 20000,     // user's spec: $20k min MC IS the newness filter —
+  // a coin at $20k+ already proved it has buyers; never kill for being young
   pumpMaxMc: 1000000,   // user's spec: scan under $1M — hard ceiling
   minMc: 50000,
   maxMc: 1000000,      // user's spec: scan under $1M — hard ceiling (was $30M)
   // v3.9: kill chain retuned for the NEW-COIN game (20k–1M MC pump.fun coins
-  // with volume). The old filters were built for safe graduated coins and
-  // killed every newborn — exactly the universe the user trades.
-  minAgeMin: 2,          // was 5 — newborns are the trade
+  // with volume). NO minimum age — newborns are vetted on merit (MC, volume,
+  // holders, buys), never killed for being young.
+  minAgeMin: 0,          // disabled — the $20k MC floor does this job
   maxPumpAgeHrs: 48,
   maxAgeDays: 7,
   minBuys24h: 5,         // was 10 — young coins have fewer buys
