@@ -221,6 +221,7 @@ export function getStateSnapshot() {
     config: cfg ? {
       minTokenScore: cfg.minTokenScore, takeProfit: cfg.takeProfit,
       stopLoss: cfg.stopLoss, trailingStop: cfg.trailingStop,
+      bankrollSol: cfg.bankrollSol,
       maxHoldHours: cfg.maxHoldHours,
       solSizeBase: cfg.solSizeBase, solSizeMid: cfg.solSizeMid, solSizeTop: cfg.solSizeTop,
       whaleMcUsd: cfg.whaleMcUsd, whaleTurnoverMin: cfg.whaleTurnoverMin, whaleSolSize: cfg.whaleSolSize,

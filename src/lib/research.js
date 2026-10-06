@@ -10,6 +10,9 @@ import { pumpSocials } from './pumpfun.js';
 import { calloutCheck } from './callouts.js';
 import { floorEmit } from './events.js';
 import { storage } from './storage.js';
+import { accumulationSignal } from './feeds.js';
+
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
 const FETCH_MS = 8000;
 const TOTAL_MS = 20000;
@@ -264,6 +267,30 @@ async function researchInner(t, dossier) {
         bits.push('callouts: none');
       }
     } catch { bits.push('callouts: ?'); }
+  }
+
+  // (e) accumulation detector — user's edge: buy the crawl, not the boom.
+  // Steady volume climbing while price hasn't exploded = +4.
+  // Already doubled in-window = −3 (don't chase), unless buy pressure ≥ 80.
+  if (Date.now() < deadline) {
+    try {
+      const acc = accumulationSignal(t.address);
+      if (acc) {
+        let bp = null;
+        if (t.buys24h != null && t.sells24h != null && t.buys24h + t.sells24h > 0) {
+          bp = clamp(t.buys24h / (t.buys24h + t.sells24h) * 160 - 30, 0, 100);
+        }
+        if (acc.acc) {
+          modifier += 4;
+          bits.push(`accumulation +4 · vol ×${acc.volGrowth.toFixed(1)}, mc +${Math.round(acc.mcapChange * 100)}% (crawl, not boom)`);
+        } else if (acc.chase && !(bp != null && bp >= 80)) {
+          modifier -= 3;
+          bits.push(`chased −3 · already +${Math.round(acc.mcapChange * 100)}% in window`);
+        } else if (acc.chase) {
+          bits.push(`boomed +${Math.round(acc.mcapChange * 100)}% but pressure ${Math.round(bp)} — no chase penalty`);
+        }
+      }
+    } catch { /* fail-open */ }
   }
 
   modifier = Math.max(-10, Math.min(10, modifier));

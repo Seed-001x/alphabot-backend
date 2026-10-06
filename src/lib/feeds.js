@@ -146,3 +146,24 @@ export function momentumScore(t) {
   if (t.feeds && t.feeds.includes('trending')) return 55;
   return null;
 }
+
+// Accumulation detector — the user's edge: buy the slow volume crawl,
+// not the boom. From the snapshot store (first/prev/last per mint):
+// vol climbing steadily (×1.5+, rising across snapshots) while market cap
+// hasn't exploded yet (< +50%) = accumulation. MC already doubled in-window
+// = chased. Fail-open: returns null when history is thin.
+export function accumulationSignal(mint) {
+  try {
+    const s = loadStore();
+    const e = s[mint];
+    if (!e || !e.first || !e.prev || !e.last) return null;
+    if (!(e.first.vol > 0) || !(e.first.mc > 0)) return null;
+    const volGrowth = e.last.vol / e.first.vol;
+    const rising = e.prev.vol > e.first.vol && e.last.vol >= e.prev.vol;
+    const mcapChange = (e.last.mc - e.first.mc) / e.first.mc;
+    const acc = volGrowth >= 1.5 && rising && mcapChange < 0.5;
+    const chase = mcapChange >= 1.0;
+    if (!acc && !chase) return null;
+    return { acc, chase, volGrowth, mcapChange };
+  } catch { return null; }
+}

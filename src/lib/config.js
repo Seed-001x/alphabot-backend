@@ -3,7 +3,8 @@
 // Server owns the config; a few knobs are env-overridable.
 
 export const DEFAULT_CONFIG = {
-  bankroll0: 10000,   // v3.8: bigger virtual bankroll for SOL-denominated sizing
+  bankrollSol: 5,   // v3.8: bankroll denominated in SOL (user's call) — USD value set at portfolio creation from live SOL price
+  bankroll0: 1000,  // legacy USD fallback (only used if bankrollSol is unset)
   minTokenScore: 65,
   minLiquidityUsd: 3000,
   minVol24hUsd: 10000,

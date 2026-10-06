@@ -9,21 +9,23 @@ import { floorEmit } from './events.js';
 import { exitPolicy, getExitRules } from './exits.js';
 import { logTradeEntry, logTradeExit, noteCreatorLaunchCount } from './learning.js';
 import { fmtUsd, fmtDur } from './fmt.js';
+import { solPrice } from './dexscreener.js';
 
 // ------------------------------------------------------------ portfolio state
 let P = null; // in-memory mirror
 let hydrated = false;
 
-export function freshPortfolio(bankroll0) {
+export function freshPortfolio(bankroll0, bankrollSol) {
   return {
     bankroll0, cash: bankroll0,
+    bankrollSol: bankrollSol || null,   // SOL-denominated book (v3.8)
     equity: [{ ts: Date.now(), v: bankroll0 }],
     positions: [],
     closed: [],
     signals: [],
     cooldowns: {},
     createdAt: Date.now(),
-    version: 3,   // v3.8: SOL-denominated sizing — fresh paper portfolio
+    version: 4,   // v3.8: 5-SOL bankroll — fresh paper portfolio
   };
 }
 
@@ -41,20 +43,27 @@ export async function initPortfolio(cfg) {
     try {
       const { rows } = await pool.query('SELECT state FROM ab_desk_state WHERE id = 1');
       if (rows.length && rows[0].state && Array.isArray(rows[0].state.positions)) {
-        // v3.8: version gate — old sizing regimes (v2: 2%-of-cash) don't carry over.
-        if (rows[0].state.version === 3) {
+        // v3.8: version gate — old sizing/bankroll regimes don't carry over.
+        if (rows[0].state.version === 4) {
           P = rows[0].state;
           hydrated = true;
           console.log(`[paper] portfolio restored: $${(P.cash || 0).toFixed(0)} cash, ${(P.positions || []).length} open, ${(P.closed || []).length} closed`);
           return P;
         }
-        console.log(`[paper] portfolio version ${rows[0].state.version || '?'} → resetting to v3 (new sizing regime)`);
+        console.log(`[paper] portfolio version ${rows[0].state.version || '?'} → resetting to v4 (5-SOL bankroll)`);
       }
     } catch (e) {
       console.error('[paper] restore failed:', e.message);
     }
   }
-  P = freshPortfolio(cfg.bankroll0);
+  // Bankroll is SOL-denominated (user: 5 SOL). USD book value is set once at
+  // creation from the live SOL price; positions are sized in SOL throughout.
+  const bSol = cfg.bankrollSol || 0;
+  let spx0 = 150;
+  try { spx0 = await solPrice(); } catch { /* fallback */ }
+  const startUsd = bSol > 0 ? bSol * spx0 : cfg.bankroll0;
+  console.log(`[paper] fresh portfolio: ${bSol > 0 ? bSol + ' SOL' : ''} ≈ $${startUsd.toFixed(0)} @ $${spx0.toFixed(0)}/SOL`);
+  P = freshPortfolio(startUsd, bSol > 0 ? bSol : null);
   hydrated = true;
   persist();
   return P;
