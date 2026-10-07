@@ -282,6 +282,7 @@ export function getStateSnapshot() {
       solSizeBase: cfg.solSizeBase, solSizeMid: cfg.solSizeMid, solSizeTop: cfg.solSizeTop,
       maxPositions: cfg.maxPositions,
       aggressiveMode: !!cfg.aggressiveMode, pumpMinMc: cfg.pumpMinMc,
+      rugShield: isRugShieldOn(),
     } : null,
     portfolio: p ? {
       bankroll0: p.bankroll0, cash: p.cash,
@@ -323,7 +324,11 @@ export async function startLoop() {
     if (saved && saved.on) applyAggressive(cfg, true);
     else if (cfg.aggressiveMode) applyAggressive(cfg, true);
   } catch {}
-  // v3.19: restore user tuning from KV (survives restarts).
+  // v3.20: restore rug shield state from KV (survives restarts). Default ON.
+  try {
+    const rs = await kvGetJson('ab_rugshield', null);
+    if (rs && rs.on === false) cfg.skipRugKill = true;
+  } catch {}
   try {
     const tuning = await kvGetJson('ab_tuning', null);
     if (tuning && typeof tuning === 'object') applyTuningPatch(cfg, tuning);
@@ -372,6 +377,23 @@ export async function setAggressiveMode(on) {
 
 export function isAggressive() {
   return !!(cfg && cfg.aggressiveMode);
+}
+
+// v3.20: rug shield toggle — user-facing switch for the RugCheck kill chain.
+// on=true (default): rug/dev/holder-concentration kills active.
+// on=false: skipRugKill — coins flow to scoring regardless of RugCheck.
+export async function setRugShield(on) {
+  on = !!on;
+  if (!cfg) cfg = loadConfig();
+  if (on) delete cfg.skipRugKill;
+  else cfg.skipRugKill = true;
+  try { await kvSetJson('ab_rugshield', { on, ts: Date.now() }); } catch {}
+  console.log('[loop] rug shield:', on ? 'ON' : 'OFF');
+  return { rugShield: on };
+}
+
+export function isRugShieldOn() {
+  return !(cfg && cfg.skipRugKill);
 }
 
 // v3.19: live tuning patch from the control panel. Whitelisted keys only —

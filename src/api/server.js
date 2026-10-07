@@ -4,7 +4,7 @@
 
 import express from 'express';
 import { pool, hasDb } from '../db/pool.js';
-import { startLoop, getStateSnapshot, getClosedTrades, cycleStats, setAggressiveMode, isAggressive, fundBankroll, patchTuning, getTuning } from '../pipeline/loop.js';
+import { startLoop, getStateSnapshot, getClosedTrades, cycleStats, setAggressiveMode, isAggressive, setRugShield, isRugShieldOn, fundBankroll, patchTuning, getTuning } from '../pipeline/loop.js';
 import { getBrainStats, resetLearning } from '../lib/learning.js';
 import { getExitRules } from '../lib/exits.js';
 import { loadConfig } from '../lib/config.js';
@@ -68,6 +68,17 @@ app.post('/api/mode', async (req, res) => {
   try {
     const on = !!(req.body && req.body.on);
     const out = await setAggressiveMode(on);
+    res.json({ ok: true, ts: Date.now(), ...out });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e && e.message || e) });
+  }
+});
+
+// v3.20: rug shield toggle (POST {on: true/false}).
+app.post('/api/rugshield', async (req, res) => {
+  try {
+    const on = !!(req.body && req.body.on);
+    const out = await setRugShield(on);
     res.json({ ok: true, ts: Date.now(), ...out });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e && e.message || e) });
