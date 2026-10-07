@@ -34,11 +34,19 @@ export async function scanTokens() {
   probePumpPortal();
   const [pumpLatest, pumpTop, fresh, profiles, boosts] = await Promise.all([
     fetchPumpLatest(40),
-    fetchPumpTop(40),
+    fetchPumpTop(60),
     fetchFreshPumpCoins(40),
     fetchLatestProfiles(60),
     fetchLatestBoosts(60),
   ]);
+  // v3.23: record top-coin snapshots for movers strategy (dip/breakout detection)
+  try {
+    const { recordMoverSnapshot } = await import('./movers.js');
+    recordMoverSnapshot(pumpTop.map(c => ({
+      address: c.address, symbol: c.symbol,
+      mc: c.usd_market_cap || 0, vol24h: c.volume_24h || 0,
+    })));
+  } catch { /* movers is additive */ }
   const meta = new Map();
   for (const f of [...pumpLatest, ...fresh]) meta.set(f.address, f);
   for (const f of pumpTop) if (!meta.has(f.address)) meta.set(f.address, f);

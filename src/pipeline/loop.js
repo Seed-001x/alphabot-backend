@@ -152,21 +152,51 @@ async function scanCycle() {
       seenMints.set(c.address, Date.now());
       Q.vet.push(c);
     }
+    // v3.23: movers strategy — inject detected movers (dip/breakout/momentum)
+    // into the vet queue. They bypass seenMints (re-evaluated each cycle).
+    try {
+      const { getMovers } = await import('../lib/movers.js');
+      const { fetchTokens: fetchDsTokens, tokenView } = await import('../lib/dexscreener.js');
+      const movers = getMovers();
+      if (movers.length) {
+        const raw = await fetchDsTokens(movers.map(m => m.mint));
+        for (const m of movers) {
+          const pair = raw[m.mint];
+          const full = pair ? tokenView(pair) : null;
+          if (!full || !full.mc) continue;
+          Q.vet.push({
+            ...full, address: m.mint,
+            moverSetup: m.setup, moverChangePct: m.changePct,
+            moverDipPct: m.dipFromPeak,
+            source: 'movers', feeds: ['movers'],
+          });
+        }
+      }
+    } catch { /* movers is additive */ }
     floorEmit('scan.done', { discovered, queued: Q.vet.size });
 
     // VET: kill chain (free → trade → rug, ascending cost) via vetToken.
     // Kills go to the kill ledger + signal log; survivors queue for research.
-    for (const t of Q.vet.drain(VET_PER_CYCLE)) {
-      try {
-        const r = await vetToken(t, cfg);
-        if (r.verdict === 'KILLED') {
-          cycleStats.killed++;
-          logKill(t, r.killPass, r.killReason);
-          processResult(p, r, cfg, { silent: false });
-        } else {
-          Q.research.push({ ...t, dossier: r.dossier, score: r.score, breakdown: r.breakdown, adapted: r.adapted });
-        }
-      } catch { cycleStats.errors++; }
+    // v3.23: parallel batches of 5 — analyze multiple coins at once, not 1 by 1.
+    const vetBatch = Q.vet.drain(VET_PER_CYCLE);
+    for (let i = 0; i < vetBatch.length; i += 5) {
+      const chunk = vetBatch.slice(i, i + 5);
+      const results = await Promise.allSettled(chunk.map(t => vetToken(t, cfg)));
+      for (let j = 0; j < chunk.length; j++) {
+        const t = chunk[j];
+        const settled = results[j];
+        if (settled.status !== 'fulfilled') { cycleStats.errors++; continue; }
+        try {
+          const r = settled.value;
+          if (r.verdict === 'KILLED') {
+            cycleStats.killed++;
+            logKill(t, r.killPass, r.killReason);
+            processResult(p, r, cfg, { silent: false });
+          } else {
+            Q.research.push({ ...t, dossier: r.dossier, score: r.score, breakdown: r.breakdown, adapted: r.adapted });
+          }
+        } catch { cycleStats.errors++; }
+      }
     }
 
     // RESEARCH + JUDGE + final scoring (slow, few per cycle).

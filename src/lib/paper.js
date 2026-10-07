@@ -129,11 +129,19 @@ export function processResult(p, r, cfg, opts = {}) {
   const researchMod = r.researchMod || 0;
   score = Math.max(0, Math.min(100, score + researchMod));
   const boost = r.eliteHit ? cfg.eliteBoost : 0;
+  // v3.23: movers setup bonus — proven momentum gets a boost.
+  // dip = buy the dip (highest conviction), breakout = ride momentum, momentum = still running.
+  let moverBonus = 0;
+  if (t.moverSetup === 'dip') moverBonus = 12;
+  else if (t.moverSetup === 'breakout') moverBonus = 8;
+  else if (t.moverSetup === 'momentum') moverBonus = 5;
+  if (moverBonus > 0) sig.moverBonus = `${t.moverSetup} +${moverBonus}`;
   // Learned post-pump fade: if journal proves high-m5 entries lose, shave score.
   // Gradual, data-driven — pre-pump snipes (low m5) unaffected.
-  const m5pen = m5EntryPenalty(t.priceChange?.m5);
+  // (Movers bypass this — they have their own proven-momentum logic.)
+  const m5pen = t.moverSetup ? 0 : m5EntryPenalty(t.priceChange?.m5);
   if (m5pen > 0) sig.m5Penalty = m5pen;
-  const finalScore = Math.max(0, Math.min(100, score + boost - m5pen));
+  const finalScore = Math.max(0, Math.min(100, score + boost + moverBonus - m5pen));
   const sig = {
     ...base, verdict: 'SCORED',
     score: finalScore, rawScore: r.score,
