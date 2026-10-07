@@ -7,6 +7,7 @@ import { pool, hasDb } from '../db/pool.js';
 import { STABLE_MINTS } from './helius.js';
 import { floorEmit } from './events.js';
 import { exitPolicy, getExitRules } from './exits.js';
+import { thinkEntry, thinkExit } from './freethinker.js';
 import { logTradeEntry, logTradeExit, noteCreatorLaunchCount } from './learning.js';
 import { fmtUsd, fmtDur } from './fmt.js';
 import { solPrice } from './dexscreener.js';
@@ -180,6 +181,21 @@ export function processResult(p, r, cfg, opts = {}) {
   const entryMc = (t.mc || 0) * (1 + cfg.slippage);
   const tokens = sizeUsd / entryPrice;
   p.cash = Math.max(0, p.cash - sizeUsd);
+
+  // v3.22 FREE THINKER: per-coin adaptive TP/SL/size. The bot reads THIS coin
+  // and decides its own params instead of applying global fixed thresholds.
+  // Size is a percentage of bankroll — scales as the book grows/shrinks.
+  let adaptiveReasoning = [];
+  let adaptiveTp = null, adaptiveSl = null;
+  try {
+    const thinkToken = { ...t, score: finalScore, buyPressure: (r.breakdown && r.breakdown.buyPressure) || null };
+    const adaptive = thinkEntry(thinkToken, cfg, p.cash + (p.positions || []).reduce((a, x) => a + (x.sizeUsd || 0), 0));
+    adaptiveReasoning = adaptive.reasoning || [];
+    solSize = adaptive.solSize;
+    adaptiveTp = adaptive.tp;
+    adaptiveSl = adaptive.sl;
+  } catch (e) { /* thinker failed → use standard sizing */ }
+
   const pos = {
     mint: t.address, symbol: t.symbol, name: t.name,
     entryMc, entryPrice, entryTs: now,
@@ -189,6 +205,9 @@ export function processResult(p, r, cfg, opts = {}) {
     buyPressure: (r.breakdown && r.breakdown.buyPressure) || null,
     entryVol: t.vol24h || null,
     volBoosted, turnover: turnover || null,
+    // v3.22 FREE THINKER: per-coin adaptive params stored on position
+    adaptiveTp, adaptiveSl,
+    adaptiveReasoning: adaptiveReasoning.length ? adaptiveReasoning : null,
     _dbcPool: t._dbcPool || null,     // v3.20: on-chain price refresh source
     _dbcQuote: t._dbcQuote || null,
     // v3.20: conviction holds — high-score plays get more time to run.
@@ -211,7 +230,9 @@ export function processResult(p, r, cfg, opts = {}) {
     if (t.creator) noteCreatorLaunchCount(t.creator, 1);
   } catch { /* journal is a nicety */ }
   sig.taken = true;
-  sig.reason = `ENTER ${t.symbol} · score ${finalScore}${researchMod ? ` (${researchMod >= 0 ? '+' : ''}${researchMod} research)` : ''}${r.eliteHit ? ` (+${boost} smart flow)` : ''}${volBoosted ? ` (VOL ×${turnover.toFixed(1)} boost)` : ''} · ${solSize.toFixed(2)} SOL (${fmtUsd(sizeUsd)}) @ ${fmtUsd(entryMc)} MC`;
+  const thinkerNote = adaptiveReasoning.length ? ` 🧠[${adaptiveReasoning.join('; ')}]` : '';
+  const adaptiveNote = (adaptiveTp != null) ? ` TP ${Math.round(adaptiveTp * 100)}%/SL ${Math.round(adaptiveSl * 100)}%` : '';
+  sig.reason = `ENTER ${t.symbol} · score ${finalScore}${researchMod ? ` (${researchMod >= 0 ? '+' : ''}${researchMod} research)` : ''}${r.eliteHit ? ` (+${boost} smart flow)` : ''}${volBoosted ? ` (VOL ×${turnover.toFixed(1)} boost)` : ''} · ${solSize.toFixed(2)} SOL (${fmtUsd(sizeUsd)}) @ ${fmtUsd(entryMc)} MC${adaptiveNote}${thinkerNote}`;
   floorEmit('trade.enter', {
     mint: t.address, symbol: t.symbol, name: t.name,
     score: finalScore, sizeUsd, entryMc, researchMod,
@@ -234,13 +255,34 @@ export function tick(p, priceMap, eliteSwaps, cfg) {
 
     let reason = null;
     let learned = false;
-    if (rules) {
+
+    // v3.22 FREE THINKER: discretionary exit check FIRST.
+    // When near TP/SL, the bot thinks instead of auto-selling.
+    // thinkExit returns { action: 'sell'|'hold', reason } or null.
+    try {
+      const think = thinkExit(pos, t, cfg);
+      if (think) {
+        if (think.action === 'sell') {
+          reason = `🧠 ${think.reason}`;
+          learned = false;
+        }
+        // if 'hold', we deliberately skip the hard TP/SL below for this tick
+        // by marking that the thinker has spoken
+        pos._thinkerHold = think.action === 'hold';
+        if (think.action === 'hold') pos._thinkerReason = think.reason;
+      } else {
+        pos._thinkerHold = false;
+      }
+    } catch { /* thinker error → fall through to mechanical */ }
+
+    // Only run mechanical exits if the thinker didn't say "hold"
+    if (!reason && !pos._thinkerHold && rules) {
       try {
         const pol = exitPolicy(pos, t, cfg, rules);
         if (pol) { reason = pol.reason; learned = pol.learned; }
       } catch { /* policy error → mechanical fallback below */ }
     }
-    if (!reason) {
+    if (!reason && !pos._thinkerHold) {
       if (midMultiple >= 1 + cfg.takeProfit) {
         reason = `take-profit +${Math.round(cfg.takeProfit * 100)}%`;
       } else if (midMultiple <= 1 - cfg.stopLoss) {
