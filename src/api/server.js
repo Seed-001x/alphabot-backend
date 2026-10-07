@@ -117,6 +117,63 @@ app.get('/api/trades', async (req, res) => {
   res.json({ ts: Date.now(), trades: getClosedTrades(limit) });
 });
 
+// v3.21: Learning Room — wallet style profiles.
+import { analyzeStyle, synthesizeStrategy } from '../lib/walletAnalysis.js';
+const styleProfiles = new Map(); // wallet -> { label, profile, ts }
+
+app.post('/api/learn/wallet', async (req, res) => {
+  try {
+    const { wallet, label, trades } = req.body || {};
+    if (!wallet || !trades || !Array.isArray(trades)) {
+      return res.status(400).json({ ok: false, error: 'need wallet, label, trades[]' });
+    }
+    const profile = analyzeStyle(trades);
+    styleProfiles.set(wallet, { label: label || wallet.slice(0, 8), profile, ts: Date.now() });
+    res.json({ ok: true, wallet, label, profile });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e && e.message || e) });
+  }
+});
+
+app.get('/api/learn/profiles', async (req, res) => {
+  const out = [];
+  for (const [wallet, data] of styleProfiles) {
+    out.push({ wallet, ...data });
+  }
+  res.json({ ts: Date.now(), profiles: out });
+});
+
+app.post('/api/learn/synthesize', async (req, res) => {
+  try {
+    const profiles = [...styleProfiles.values()].map(d => d.profile);
+    if (!profiles.length) {
+      return res.status(400).json({ ok: false, error: 'no profiles to synthesize' });
+    }
+    const strategy = synthesizeStrategy(profiles);
+    res.json({ ok: true, ts: Date.now(), strategy, profileCount: profiles.length });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e && e.message || e) });
+  }
+});
+
+app.post('/api/learn/apply', async (req, res) => {
+  try {
+    const profiles = [...styleProfiles.values()].map(d => d.profile);
+    if (!profiles.length) {
+      return res.status(400).json({ ok: false, error: 'no profiles to synthesize' });
+    }
+    const strategy = synthesizeStrategy(profiles);
+    const out = await patchTuning({
+      takeProfit: strategy.takeProfit,
+      stopLoss: strategy.stopLoss,
+      maxHoldHours: strategy.maxHoldHours,
+    });
+    res.json({ ok: true, ts: Date.now(), strategy, applied: out });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e && e.message || e) });
+  }
+});
+
 // The learning floor: ledgers, hit rates, correlations, exit rules.
 app.get('/api/brain', async (req, res) => {
   let brain = null, exitRules = null;
