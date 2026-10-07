@@ -256,10 +256,21 @@ export function tick(p, priceMap, eliteSwaps, cfg) {
     let reason = null;
     let learned = false;
 
+    // v3.22: LIQUIDITY DEATH CHECK — if liquidity vanishes, the price is
+    // frozen and the position is unexitable. Exit immediately and mark it.
+    // Threshold: liquidity < $200 OR < 50% of position value = dead.
+    const liq = t.liquidity || 0;
+    const posValue = pos.sizeUsd * midMultiple;
+    if (liq < 200 || liq < posValue * 0.5) {
+      reason = `💀 liquidity death — $${Math.round(liq)} liq vs $${Math.round(posValue)} position (unexitable)`;
+      learned = false;
+      // Don't run any other exit logic — this is terminal
+    }
+
     // v3.22 FREE THINKER: discretionary exit check FIRST.
     // When near TP/SL, the bot thinks instead of auto-selling.
     // thinkExit returns { action: 'sell'|'hold', reason } or null.
-    try {
+    if (!reason) try {
       const think = thinkExit(pos, t, cfg);
       if (think) {
         if (think.action === 'sell') {

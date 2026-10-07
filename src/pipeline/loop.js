@@ -230,7 +230,7 @@ async function priceTick() {
       const { tokenView } = await import('../lib/dexscreener.js');
       for (const m of mints) {
         const t = tokenView(raw[m]);
-        if (t) priceMap[m] = { price: t.price, mc: t.mc, vol24h: t.vol24h, buys24h: t.buys24h, sells24h: t.sells24h };
+        if (t) priceMap[m] = { price: t.price, mc: t.mc, vol24h: t.vol24h, buys24h: t.buys24h, sells24h: t.sells24h, liquidity: t.liquidity };
       }
     }
     // v3.20: bundle distribution check — every 5 min, re-fetch dossier for
