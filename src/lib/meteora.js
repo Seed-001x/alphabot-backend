@@ -33,11 +33,15 @@ let retryAt = 0;
 let backoffMs = RETRY_BASE;
 let onLaunchCb = null;
 const seen = new Map(); // mint -> ts
-const stats = { launches: 0, errors: 0, lastLaunchTs: 0 };
+const stats = { launches: 0, errors: 0, lastLaunchTs: 0, lastError: null };
 
 export function dbcState() { return state; }
 export function getDbcStats() {
-  return { state, launches: stats.launches, errors: stats.errors, lastLaunchTs: stats.lastLaunchTs };
+  return { state, launches: stats.launches, errors: stats.errors, lastLaunchTs: stats.lastLaunchTs, lastError: stats.lastError };
+}
+
+function noteError(e) {
+  try { stats.lastError = String((e && e.message) || e).slice(0, 200); } catch {}
 }
 
 let coder = null;
@@ -240,12 +244,16 @@ export function startDbcWatch(onLaunch) {
 
     ws.on('close', (code, reason) => {
       if (state === 'live' || state === 'probing') {
-        console.log(`[dbc] ws closed (code ${code})${reason ? ' ' + reason.toString().slice(0, 100) : ''} — retrying`);
+        const msg = `ws closed (code ${code})${reason ? ' ' + reason.toString().slice(0, 100) : ''}`;
+        console.log(`[dbc] ${msg} — retrying`);
+        noteError(msg);
       }
       if (alive) scheduleRetry();
     });
     ws.on('error', (e) => {
-      console.error('[dbc] ws error:', (e && e.message || String(e)).slice(0, 200));
+      const msg = 'ws error: ' + ((e && e.message || String(e)).slice(0, 200));
+      console.error('[dbc]', msg);
+      noteError(msg);
       try { ws && ws.close(); } catch {}
     });
     // Helius: 10-min inactivity timeout — ping every 30s to keep alive.
