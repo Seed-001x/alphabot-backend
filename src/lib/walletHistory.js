@@ -21,7 +21,8 @@ export async function fetchWalletSwaps(wallet, limit = 100) {
     const params = new URLSearchParams({
       'api-key': key,
       limit: Math.min(100, limit - out.length).toString(),
-      type: 'SWAP',
+      // v3.21: no type filter — pump.fun trades aren't always tagged SWAP.
+      // We filter in buildTradeHistory by looking for token transfers.
     });
     if (before) params.set('before', before);
 
@@ -50,10 +51,11 @@ export async function buildTradeHistory(wallet, maxTxns = 200) {
     const ts = (tx.timestamp || 0) * 1000;
     if (!ts) continue;
 
-    // Token in (buy): wallet received tokens
+    // Token in (buy): wallet received tokens (skip stables)
     for (const t of (tx.tokenTransfers || [])) {
       if (t.toUserAccount !== wallet) continue;
       if (!t.mint || t.mint === 'So11111111111111111111111111111111111111112') continue;
+      if (t.mint === 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v') continue; // USDC
       const amt = t.tokenAmount || 0;
       if (!(amt > 0)) continue;
 
@@ -76,10 +78,11 @@ export async function buildTradeHistory(wallet, maxTxns = 200) {
       entry.buys.push({ amount: usdSpent, tokens: amt, ts, mcap: 0 });
     }
 
-    // Token out (sell): wallet sent tokens
+    // Token out (sell): wallet sent tokens (skip stables)
     for (const t of (tx.tokenTransfers || [])) {
       if (t.fromUserAccount !== wallet) continue;
       if (!t.mint || t.mint === 'So11111111111111111111111111111111111111112') continue;
+      if (t.mint === 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v') continue; // USDC
       const amt = t.tokenAmount || 0;
       if (!(amt > 0)) continue;
 
