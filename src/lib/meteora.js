@@ -223,6 +223,12 @@ export function startDbcWatch(onLaunch) {
         console.log('[dbc] live — DBC launch stream connected');
         return;
       }
+      // Helius error response
+      if (d.error) {
+        console.error('[dbc] subscription error:', JSON.stringify(d.error).slice(0, 200));
+        try { ws && ws.close(); } catch {}
+        return;
+      }
       const v = d.params && d.params.result && d.params.result.value;
       if (!v || v.err) return;
       const logs = (v.logs || []).join('\n').toLowerCase();
@@ -232,8 +238,22 @@ export function startDbcWatch(onLaunch) {
       handleLaunch(key, sig).catch(() => { stats.errors++; });
     });
 
-    ws.on('close', () => { if (alive) scheduleRetry(); });
-    ws.on('error', () => { try { ws && ws.close(); } catch {} });
+    ws.on('close', (code, reason) => {
+      if (state === 'live' || state === 'probing') {
+        console.log(`[dbc] ws closed (code ${code})${reason ? ' ' + reason.toString().slice(0, 100) : ''} — retrying`);
+      }
+      if (alive) scheduleRetry();
+    });
+    ws.on('error', (e) => {
+      console.error('[dbc] ws error:', (e && e.message || String(e)).slice(0, 200));
+      try { ws && ws.close(); } catch {}
+    });
+    // Helius: 10-min inactivity timeout — ping every 30s to keep alive.
+    const pingTimer = setInterval(() => {
+      try { ws && ws.readyState === 1 && ws.ping(); } catch {}
+    }, 30000);
+    const origClose = ws.close.bind(ws);
+    ws.close = (...a) => { clearInterval(pingTimer); return origClose(...a); };
   }
 
   connect();
