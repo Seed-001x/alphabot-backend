@@ -148,7 +148,9 @@ export function freeKill(t, cfg) {
   }
   // v3.17: social link required — kills random dev extract launches with no
   // twitter/website/telegram attached. v3.18: skipped in aggressive mode.
-  if (!cfg.skipSocialCheck && !t.twitter && !t.website && !t.telegram) return 'no socials · dev extract risk';
+  // v3.20: GeckoTerminal new pools don't carry social metadata (too new) —
+  // the RugCheck dossier still runs, so skip the social gate for _gt only.
+  if (!cfg.skipSocialCheck && !t._gt && !t.twitter && !t.website && !t.telegram) return 'no socials · dev extract risk';
   const mc = t.mc || 0;
   const lo = t.graduated ? cfg.minMc : cfg.pumpMinMc;
   const hi = t.graduated ? cfg.maxMc : cfg.pumpMaxMc;
