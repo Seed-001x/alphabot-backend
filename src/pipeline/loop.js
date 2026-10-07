@@ -20,6 +20,7 @@ import {
 import { initLearning, logKill, confirmKills, getBrainStats } from '../lib/learning.js';
 import { getExitRules } from '../lib/exits.js';
 import { startFlowWatch, getFlowStats } from '../lib/flowWatch.js';
+import { startDbcWatch, fetchDbcPrices, getDbcStats, dbcState } from '../lib/meteora.js';
 import { probePumpPortal, pumpPortalState } from '../lib/pumpportal.js';
 import { recentEvents, floorEmit } from '../lib/events.js';
 
@@ -95,6 +96,41 @@ function injectMint(mint, source) {
       floorEmit('flow.mint', { mint, symbol: t.symbol, name: t.name });
     }
   }).catch(() => {});
+}
+
+// v3.20: Meteora DBC launch injection. The launch already carries on-chain
+// price + MC (pre-DexScreener), so it goes straight to the vet queue —
+// no DexScreener round-trip needed.
+function injectDbcLaunch(launch) {
+  if (!launch || !launch.mint || seenMints.has(launch.mint)) return;
+  seenMints.set(launch.mint, Date.now());
+  const t = {
+    address: launch.mint,
+    name: launch.name || 'Unknown',
+    symbol: launch.symbol || '???',
+    image: null,
+    price: launch.price || null,
+    fdv: launch.mc || null,
+    mc: launch.mc || null,
+    supply: launch.supply || null,
+    liquidity: null,          // on-curve: the bonding curve IS liquidity
+    vol24h: null,              // too new for 24h volume — skips the vol floor
+    buys24h: null,
+    sells24h: null,
+    createdAt: launch.ts || Date.now(),
+    dex: 'meteora-dbc',
+    url: null,
+    priceChange: null,
+    graduated: false,          // on-curve, like pre-grad pump.fun
+    _dbc: true,                // DBC-native: skips vol floor, uses on-chain pricing
+    _dbcPool: launch.pool || null,
+    _dbcQuote: launch.quoteMint || null,
+    source: 'meteora-dbc',
+    feeds: ['new'],
+  };
+  Q.vet.unshiftFront([t]);
+  cycleStats.discovered++;
+  floorEmit('flow.mint', { mint: launch.mint, symbol: t.symbol, name: t.name });
 }
 
 async function scanCycle() {
@@ -195,6 +231,21 @@ async function priceTick() {
         if (t) priceMap[m] = { price: t.price, mc: t.mc, vol24h: t.vol24h, buys24h: t.buys24h, sells24h: t.sells24h };
       }
     }
+    // v3.20: on-chain price refresh for DBC positions (pre-DexScreener).
+    // DexScreener lags new DBC pools by minutes; the curve doesn't.
+    try {
+      const dbcPositions = (p.positions || []).filter(x => x._dbcPool && x.mint);
+      if (dbcPositions.length && heliusKey()) {
+        const dbcPrices = await fetchDbcPrices(
+          heliusKey(),
+          dbcPositions.map(x => ({ mint: x.mint, pool: x._dbcPool, quoteMint: x._dbcQuote }))
+        );
+        for (const m of Object.keys(dbcPrices)) {
+          const q = dbcPrices[m];
+          priceMap[m] = { ...(priceMap[m] || {}), price: q.price, mc: q.mc };
+        }
+      }
+    } catch { /* DBC refresh is a nicety */ }
     const elite = await refreshElite();
     const closed = tick(p, priceMap, elite.swaps, cfg);
     if (closed.length) cycleStats.exits += closed.length;
@@ -244,6 +295,7 @@ export function getStateSnapshot() {
     events: recentEvents(80),
     queues: queueStats(),
     flow: getFlowStats(),
+    dbc: getDbcStats(),
     judge: getJudgeStats(),
     cycle: { ...cycleStats },
     keys: {
@@ -281,6 +333,9 @@ export async function startLoop() {
 
   // Smart-flow watcher (dormant without HELIUS_API_KEY).
   startFlowWatch((mint) => injectMint(mint, 'flow'));
+
+  // v3.20: Meteora DBC launch feed (dormant without HELIUS_API_KEY).
+  startDbcWatch((launch) => injectDbcLaunch(launch));
 
   // Kick off immediately, then on interval.
   scanCycle().catch(() => {});

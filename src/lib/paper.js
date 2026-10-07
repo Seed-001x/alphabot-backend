@@ -189,6 +189,8 @@ export function processResult(p, r, cfg, opts = {}) {
     buyPressure: (r.breakdown && r.breakdown.buyPressure) || null,
     entryVol: t.vol24h || null,
     volBoosted, turnover: turnover || null,
+    _dbcPool: t._dbcPool || null,     // v3.20: on-chain price refresh source
+    _dbcQuote: t._dbcQuote || null,
   };
   p.positions.push(pos);
   // Trade journal: entry snapshot (durable learning).
