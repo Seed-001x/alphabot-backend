@@ -194,6 +194,10 @@ export function processResult(p, r, cfg, opts = {}) {
     // v3.20: conviction holds — high-score plays get more time to run.
     // Score 70+: 4h, 50+: 2.5h, else the global maxHoldHours.
     maxHoldMs: finalScore >= 70 ? 4 * 3600e3 : finalScore >= 50 ? 2.5 * 3600e3 : null,
+    // v3.20: bundle distribution tracking — snapshot at entry, compare over time.
+    // When the bundle distributes (pct drops), selling pressure lifts = bullish.
+    bundleAtEntry: r.dossier && r.dossier.bundlePct != null ? r.dossier.bundlePct : null,
+    bundleScoreAtEntry: r.dossier && r.dossier.bundleScore != null ? r.dossier.bundleScore : null,
   };
   p.positions.push(pos);
   // Trade journal: entry snapshot (durable learning).

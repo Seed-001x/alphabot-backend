@@ -143,6 +143,10 @@ export async function fetchRugReport(mint) {
       : null;
     const creator = d.creator || null;
     const devEntry = creator ? holders.find(h => h.owner === creator) : null;
+    // v3.20: bundle analysis — detect coordinated multi-wallet supply control.
+    // Bundles split across many wallets with similar sizes to dodge top-holder
+    // checks. Natural distributions are power-law; bundles are flat clusters.
+    const bundle = analyzeBundle(holders, creator);
     const report = {
       topPct,
       top10Pct,
@@ -152,10 +156,37 @@ export async function fetchRugReport(mint) {
       risks: (d.risks || []).map(x => x.name).filter(Boolean).slice(0, 6),
       scoreNorm: d.score_normalised != null ? d.score_normalised : null,
       launchpad: d.launchpad || null,
+      bundleScore: bundle.score,      // 0-100, higher = more bundled
+      bundleWallets: bundle.wallets,  // count of suspected bundle wallets
+      bundlePct: bundle.pct,          // combined % held by bundle wallets
     };
     reportCache.set(mint, { report, ts: now });
     return report;
   } catch { return null; }
+}
+
+// v3.20: bundle pattern detection.
+// Looks for flat clusters in holders 2-20 (skipping #1 which is often LP/dev).
+// A bundle = 4+ wallets each holding 0.3%-8% with low variance between them.
+function analyzeBundle(holders, creator) {
+  const out = { score: 0, wallets: 0, pct: 0 };
+  if (!holders || holders.length < 5) return out;
+  // Skip holder #1 (usually LP pool or dev), analyze 2-20.
+  const rest = holders.slice(1, 20).filter(h => h.pct > 0.1 && h.pct < 10);
+  if (rest.length < 4) return out;
+  // Check for flat cluster: low coefficient of variation = suspicious.
+  const pcts = rest.map(h => h.pct);
+  const mean = pcts.reduce((a, b) => a + b, 0) / pcts.length;
+  const variance = pcts.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / pcts.length;
+  const cv = mean > 0 ? Math.sqrt(variance) / mean : 99;
+  // CV < 0.8 with 4+ wallets in similar range = likely bundle.
+  if (cv < 0.8 && rest.length >= 4) {
+    out.wallets = rest.length;
+    out.pct = Math.round(pcts.reduce((a, b) => a + b, 0) * 10) / 10;
+    // Score: more wallets + higher combined % = more bundled.
+    out.score = Math.min(100, Math.round(rest.length * 8 + out.pct * 1.5));
+  }
+  return out;
 }
 
 export function curveProgress(mc) {

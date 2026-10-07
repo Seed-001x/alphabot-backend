@@ -17,7 +17,7 @@ import { STABLE_MINTS } from './helius.js';
 import { fmtUsd } from './fmt.js';
 import { floorEmit } from './events.js';
 
-export const SCORE_WEIGHTS = { liquidity: 15, holders: 25, buyPressure: 30, curve: 15, age: 15, momentum: 10 };
+export const SCORE_WEIGHTS = { liquidity: 15, holders: 20, bundle: 10, buyPressure: 30, curve: 15, age: 15, momentum: 10 };
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const logScale = (v, lo, hi) => {
@@ -212,6 +212,14 @@ export function scoreToken(t, dossier, cfg) {
     const parts = [topS, devS].filter(v => v != null);
     holders = parts.length ? parts.reduce((a, b) => a + b, 0) / parts.length : null;
   }
+  // v3.20: bundle awareness — heavy undisclosed bundles drag the score,
+  // but don't kill (user wants loose gates). A distributing bundle (pct
+  // dropping over time) is actually bullish — tracked separately.
+  let bundle = null;
+  if (dossier && dossier.bundleScore != null && dossier.bundleScore > 0) {
+    // 0-30: mild, 30-60: moderate drag, 60+: heavy drag.
+    bundle = clamp(100 - dossier.bundleScore * 0.8, 0, 100);
+  }
   let buyPressure = null;
   if (t.buys24h != null && t.sells24h != null && t.buys24h + t.sells24h > 0) {
     const r = t.buys24h / (t.buys24h + t.sells24h);
@@ -234,7 +242,7 @@ export function scoreToken(t, dossier, cfg) {
   const { weights: W0, adapted } = getAdaptiveWeights(SCORE_WEIGHTS);
   // v3.18: aggressive mode — momentum matters more (catch the runners).
   const W = cfg.aggressiveMode ? { ...W0, momentum: AGGRESSIVE_MOMENTUM_WEIGHT } : W0;
-  const parts = { liquidity, holders, buyPressure, curve, age, momentum };
+  const parts = { liquidity, holders, bundle, buyPressure, curve, age, momentum };
   let num = 0, den = 0;
   for (const k of Object.keys(W)) {
     if (parts[k] != null) { num += W[k] * parts[k]; den += W[k]; }

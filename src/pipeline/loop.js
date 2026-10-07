@@ -233,6 +233,28 @@ async function priceTick() {
         if (t) priceMap[m] = { price: t.price, mc: t.mc, vol24h: t.vol24h, buys24h: t.buys24h, sells24h: t.sells24h };
       }
     }
+    // v3.20: bundle distribution check — every 5 min, re-fetch dossier for
+    // positions that had a bundle at entry. If bundle % dropped 30%+, the
+    // overhang is clearing = bullish, extend hold. If still heavy, tighten.
+    try {
+      const now = Date.now();
+      if (!priceTick._lastBundle || now - priceTick._lastBundle > 300000) {
+        priceTick._lastBundle = now;
+        const { fetchRugReport } = await import('../lib/pumpfun.js');
+        for (const pos of (p.positions || []).filter(x => x.bundleAtEntry > 5)) {
+          const d = await fetchRugReport(pos.mint);
+          if (d && d.bundlePct != null) {
+            const drop = pos.bundleAtEntry - d.bundlePct;
+            pos.bundleNow = d.bundlePct;
+            if (drop >= pos.bundleAtEntry * 0.3) {
+              // Bundle distributing — extend hold by 1h, loosen trailing.
+              pos.maxHoldMs = (pos.maxHoldMs || 5400000) + 3600000;
+              pos.bundleDistributing = true;
+            }
+          }
+        }
+      }
+    } catch {}
     // v3.20: on-chain price refresh for DBC positions (pre-DexScreener).
     // DexScreener lags new DBC pools by minutes; the curve doesn't.
     try {
