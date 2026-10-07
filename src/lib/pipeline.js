@@ -243,11 +243,40 @@ export function scoreToken(t, dossier, cfg) {
   return { score, breakdown: parts, adapted, weights: W };
 }
 
+// v3.20: copycat registry — symbol (uppercased) → { mint, mc, firstSeen }.
+// Kills younger/lower-MC duplicates riding a real coin's name (e.g. fake
+// TWEETCRAFT with a vanity "moon" mint). The highest-MC mint wins the symbol.
+const seenSymbols = new Map();
+export function copycatKill(t) {
+  const sym = (t.symbol || '').toUpperCase().trim();
+  if (!sym || sym.length < 2) return null;
+  const mc = t.mc || 0;
+  const prev = seenSymbols.get(sym);
+  if (prev && prev.mint !== t.address) {
+    // Different mint, same symbol. Higher MC wins.
+    if (mc <= prev.mc * 1.5) {
+      return `copycat · ${sym} already tracked at ${prev.mint.slice(0, 8)} (${fmtUsd(prev.mc)} MC)`;
+    }
+    // New one is decisively bigger — it takes the symbol.
+    seenSymbols.set(sym, { mint: t.address, mc, firstSeen: Date.now() });
+    return null;
+  }
+  if (!prev) seenSymbols.set(sym, { mint: t.address, mc, firstSeen: Date.now() });
+  else if (mc > prev.mc) prev.mc = mc; // refresh MC for the tracked mint
+  return null;
+}
+
 export async function vetToken(t, cfg) {
   const fk = freeKill(t, cfg);
   if (fk) {
     floorEmit('vet.kill', { mint: t.address, symbol: t.symbol, name: t.name, killPass: 'free', killReason: fk });
     return { verdict: 'KILLED', killReason: fk, killPass: 'free', t };
+  }
+  // v3.20: copycat check — kill duplicate symbols riding a real coin's name.
+  const ck = copycatKill(t);
+  if (ck) {
+    floorEmit('vet.kill', { mint: t.address, symbol: t.symbol, name: t.name, killPass: 'copycat', killReason: ck });
+    return { verdict: 'KILLED', killReason: ck, killPass: 'copycat', t };
   }
   const tk = tradeKill(t, cfg);
   if (tk) {

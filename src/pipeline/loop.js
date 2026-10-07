@@ -402,6 +402,7 @@ const TUNABLE_KEYS = [
   'maxMc', 'pumpMaxMc', 'minMc', 'pumpMinMc',
   'minTokenScore', 'takeProfit', 'stopLoss', 'trailingStop',
   'maxPositions', 'cooldownMin', 'minVol24hUsd', 'solSizeBase', 'solSizeMid', 'solSizeTop',
+  'maxDevPct', 'maxTopHolderPct', 'maxTop10Pct', 'maxHoldHours', // v3.20: smart shield tuning
 ];
 export function applyTuningPatch(target, patch) {
   const applied = {};

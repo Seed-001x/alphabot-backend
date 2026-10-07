@@ -112,8 +112,8 @@ export function exitPolicy(pos, q, cfg, rules) {
       midMultiple <= pos.peakMultiple * (1 - cfg.trailingStop)) {
     return { reason: `trailing stop −${Math.round(cfg.trailingStop * 100)}% from peak`, learned: false };
   }
-  if (holdMs >= cfg.maxHoldHours * 3600e3) {
-    return { reason: `max hold ${cfg.maxHoldHours}h reached`, learned: false };
+  if (holdMs >= (pos.maxHoldMs || cfg.maxHoldHours * 3600e3)) {
+    return { reason: `max hold ${((pos.maxHoldMs || cfg.maxHoldHours * 3600e3) / 3600e3).toFixed(1)}h reached`, learned: false };
   }
 
   // SNIPER PLAYBOOK (baked, ungated): memecoin exits are about speed.

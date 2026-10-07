@@ -191,6 +191,9 @@ export function processResult(p, r, cfg, opts = {}) {
     volBoosted, turnover: turnover || null,
     _dbcPool: t._dbcPool || null,     // v3.20: on-chain price refresh source
     _dbcQuote: t._dbcQuote || null,
+    // v3.20: conviction holds — high-score plays get more time to run.
+    // Score 70+: 4h, 50+: 2.5h, else the global maxHoldHours.
+    maxHoldMs: finalScore >= 70 ? 4 * 3600e3 : finalScore >= 50 ? 2.5 * 3600e3 : null,
   };
   p.positions.push(pos);
   // Trade journal: entry snapshot (durable learning).
@@ -240,8 +243,8 @@ export function tick(p, priceMap, eliteSwaps, cfg) {
         reason = `stop-loss −${Math.round(cfg.stopLoss * 100)}%`;
       } else if (pos.peakMultiple >= 1 + cfg.trailingArmAt && midMultiple <= pos.peakMultiple * (1 - cfg.trailingStop)) {
         reason = `trailing stop −${Math.round(cfg.trailingStop * 100)}% from peak`;
-      } else if (now - pos.entryTs >= cfg.maxHoldHours * 3600e3) {
-        reason = `max hold ${cfg.maxHoldHours}h reached`;
+      } else if (now - pos.entryTs >= (pos.maxHoldMs || cfg.maxHoldHours * 3600e3)) {
+        reason = `max hold ${((pos.maxHoldMs || cfg.maxHoldHours * 3600e3) / 3600e3).toFixed(1)}h reached`;
       }
     }
     if (!reason && eliteSwaps) {
