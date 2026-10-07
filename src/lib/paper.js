@@ -151,15 +151,6 @@ export function processResult(p, r, cfg, opts = {}) {
 
   if (STABLE_MINTS.has(t.address)) return gate('stablecoin excluded');
   if (!(finalScore >= cfg.minTokenScore)) return gate(`score ${finalScore} < ${cfg.minTokenScore} bar`);
-
-  // v3.22: VERTICAL PUMP GUARD — don't chase snipe-and-dumps.
-  // If it already did 3x+ in the last 5 min, the vertical candle happened
-  // WITHOUT us. Entering now = buying the top before the dump.
-  // We only want pre-pump entries (like Taylor @ $13K), not post-pump chases.
-  const m5 = t.priceChange?.m5;
-  if (m5 != null && m5 > 200) {
-    return gate(`vertical pump guard — already +${Math.round(m5)}% in 5m, not chasing`);
-  }
   if ((p.positions || []).length >= cfg.maxPositions) return gate(`max ${cfg.maxPositions} positions open`);
   if ((p.positions || []).some(x => x.mint === t.address)) return gate(`already holding ${t.symbol}`);
   const cd = (p.cooldowns || {})[t.address];
