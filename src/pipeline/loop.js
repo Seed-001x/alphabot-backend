@@ -258,14 +258,29 @@ async function priceTick() {
     if (mints.length) {
       const raw = await fetchTokens(mints);
       const { tokenView } = await import('../lib/dexscreener.js');
+      // v3.23: pump.fun fallback for fresh coins DexScreener hasn't indexed yet
+      const needPf = [];
       for (const m of mints) {
         const t = tokenView(raw[m]);
-        if (t) {
-          priceMap[m] = { price: t.price, mc: t.mc, vol24h: t.vol24h, buys24h: t.buys24h, sells24h: t.sells24h, liquidity: t.liquidity };
+        if (!t || !t.mc) needPf.push(m);
+      }
+      let pfPrices = {};
+      if (needPf.length) {
+        try {
+          const { fetchPumpPrices } = await import('../lib/pumpfun.js');
+          pfPrices = await fetchPumpPrices(needPf);
+        } catch { /* fallback is best-effort */ }
+      }
+      for (const m of mints) {
+        const t = tokenView(raw[m]);
+        if (t && t.mc > 0) {
+          priceMap[m] = { price: t.price, mc: t.mc, vol24h: t.vol24h, buys24h: t.buys24h, sells24h: t.sells24h, liquidity: t.liquidity, src: 'ds' };
+        } else if (pfPrices[m] && pfPrices[m] > 0) {
+          priceMap[m] = { price: null, mc: pfPrices[m], vol24h: 0, liquidity: 0, src: 'pf' };
         } else if (raw[m]) {
           // DexScreener knows the token but reports no price/MC = dead.
           // Record explicit zero so the sweeper closes it immediately.
-          priceMap[m] = { price: 0, mc: 0, vol24h: 0, liquidity: 0 };
+          priceMap[m] = { price: 0, mc: 0, vol24h: 0, liquidity: 0, src: 'dead' };
         }
       }
     }

@@ -199,3 +199,28 @@ export function curveProgress(mc) {
 export function isOnCurve(pair) {
   return !!pair && (pair.dexId === 'pumpfun' || pair.dexId === 'pump');
 }
+
+// v3.23: batch MC lookup for open positions — fallback when DexScreener
+// hasn't indexed a fresh coin yet. Returns { mint: usd_market_cap }.
+export async function fetchPumpPrices(mints) {
+  const out = {};
+  const chunks = [];
+  for (let i = 0; i < mints.length; i += 10) chunks.push(mints.slice(i, i + 10));
+  for (const chunk of chunks) {
+    const results = await Promise.allSettled(
+      chunk.map(async (m) => {
+        try {
+          const r = await fetch(`${PF}/coins/${m}`, { signal: AbortSignal.timeout(8000) });
+          if (!r.ok) return null;
+          const d = await r.json();
+          const mc = d.usd_market_cap;
+          return mc > 0 ? { mint: m, mc } : null;
+        } catch { return null; }
+      })
+    );
+    for (const s of results) {
+      if (s.status === 'fulfilled' && s.value) out[s.value.mint] = s.value.mc;
+    }
+  }
+  return out;
+}
