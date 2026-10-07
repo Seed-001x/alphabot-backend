@@ -8,7 +8,7 @@ import { STABLE_MINTS } from './helius.js';
 import { floorEmit } from './events.js';
 import { exitPolicy, getExitRules } from './exits.js';
 import { thinkEntry, thinkExit } from './freethinker.js';
-import { logTradeEntry, logTradeExit, noteCreatorLaunchCount } from './learning.js';
+import { logTradeEntry, logTradeExit, noteCreatorLaunchCount, m5EntryPenalty } from './learning.js';
 import { fmtUsd, fmtDur } from './fmt.js';
 import { solPrice } from './dexscreener.js';
 
@@ -129,7 +129,11 @@ export function processResult(p, r, cfg, opts = {}) {
   const researchMod = r.researchMod || 0;
   score = Math.max(0, Math.min(100, score + researchMod));
   const boost = r.eliteHit ? cfg.eliteBoost : 0;
-  const finalScore = Math.min(100, score + boost);
+  // Learned post-pump fade: if journal proves high-m5 entries lose, shave score.
+  // Gradual, data-driven — pre-pump snipes (low m5) unaffected.
+  const m5pen = m5EntryPenalty(t.priceChange?.m5);
+  if (m5pen > 0) sig.m5Penalty = m5pen;
+  const finalScore = Math.max(0, Math.min(100, score + boost - m5pen));
   const sig = {
     ...base, verdict: 'SCORED',
     score: finalScore, rawScore: r.score,
@@ -220,12 +224,15 @@ export function processResult(p, r, cfg, opts = {}) {
   };
   p.positions.push(pos);
   // Trade journal: entry snapshot (durable learning).
+  // m5Change captures momentum state at entry — lets learning distinguish
+  // pre-pump snipes (low m5, like Taylor @ $13K) from post-pump chases.
   try {
     logTradeEntry({
       mint: pos.mint, symbol: pos.symbol, entryMc: pos.entryMc,
       score: finalScore, breakdown: r.breakdown, feeds: t.feeds || null,
       researchMod, researchLine: r.researchLine || null, eliteHit: !!r.eliteHit,
       buyPressure: pos.buyPressure, creator: t.creator || null,
+      m5Change: t.priceChange?.m5 ?? null,
     });
     if (t.creator) noteCreatorLaunchCount(t.creator, 1);
   } catch { /* journal is a nicety */ }
@@ -249,7 +256,30 @@ export function tick(p, priceMap, eliteSwaps, cfg) {
   try { rules = getExitRules(cfg); } catch { rules = null; }
   for (const pos of (p.positions || [])) {
     const t = priceMap[pos.mint];
-    if (!t || !t.price || !t.mc) { keep.push(pos); continue; }
+    // DEAD POSITION SWEEPER: if no price data for 15+ min, or price is 0,
+    // the coin is dead. Close it instead of holding a zombie forever.
+    if (!t || !t.price || !t.mc) {
+      const staleMs = now - (pos.lastPriceTs || pos.entryTs);
+      if (staleMs > 15 * 60000) {
+        pos.exitMc = 0; pos.exitTs = now; pos.multiple = 0;
+        pos.exitReason = `🧹 dead — no price data for ${Math.round(staleMs/60000)}m`;
+        pos.pnlUsd = -pos.sizeUsd;
+        closed.push(pos);
+        try { logTradeExit({ ...pos, mint: pos.mint }); } catch {}
+        continue;
+      }
+      keep.push(pos); continue;
+    }
+    pos.lastPriceTs = now;
+    // Zero MC = coin is dead, close immediately
+    if (t.mc <= 0) {
+      pos.exitMc = 0; pos.exitTs = now; pos.multiple = 0;
+      pos.exitReason = `🧹 dead — MC went to $0`;
+      pos.pnlUsd = -pos.sizeUsd;
+      closed.push(pos);
+      try { logTradeExit({ ...pos, mint: pos.mint }); } catch {}
+      continue;
+    }
     const midMultiple = t.mc / pos.entryMc;
     if (midMultiple > pos.peakMultiple) pos.peakMultiple = midMultiple;
 

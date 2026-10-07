@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS ab_trade_journal (
   hold_ms BIGINT,
   buy_pressure NUMERIC,
   creator TEXT,
+  m5_change NUMERIC,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS ab_trade_journal_mint_idx ON ab_trade_journal (mint);

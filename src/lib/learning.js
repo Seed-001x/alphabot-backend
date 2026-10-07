@@ -190,12 +190,12 @@ export function logTradeEntry(snap) {
     while (journal.length > CAP) journal.shift();
     if (hasDb && hydrated) {
       q(
-        `INSERT INTO ab_trade_journal (mint, symbol, entry_ts, entry_mc, score, breakdown, feeds, research_mod, research_line, elite_hit, buy_pressure, creator)
-         VALUES ($1,$2,to_timestamp($3/1000.0),$4,$5,$6::jsonb,$7::jsonb,$8,$9,$10,$11,$12) RETURNING id`,
+        `INSERT INTO ab_trade_journal (mint, symbol, entry_ts, entry_mc, score, breakdown, feeds, research_mod, research_line, elite_hit, buy_pressure, creator, m5_change)
+         VALUES ($1,$2,to_timestamp($3/1000.0),$4,$5,$6::jsonb,$7::jsonb,$8,$9,$10,$11,$12,$13) RETURNING id`,
         [e.mint, e.symbol || null, e.entryTs, e.entryMc ?? null, e.score ?? null,
          JSON.stringify(e.breakdown || null), JSON.stringify(e.feeds || null),
          e.researchMod ?? null, e.researchLine || null, !!e.eliteHit,
-         e.buyPressure ?? null, e.creator || null]
+         e.buyPressure ?? null, e.creator || null, e.m5Change ?? null]
       ).then(r => { if (r && r.rows[0]) e.id = r.rows[0].id; });
       q('DELETE FROM ab_trade_journal WHERE id NOT IN (SELECT id FROM ab_trade_journal ORDER BY id DESC LIMIT 1000)');
     }
@@ -247,7 +247,7 @@ export function componentCorrelations() {
   try {
     const closed = journal.filter(t => t.exitTs != null && t.pnlPct != null && t.breakdown);
     const comps = ['liquidity', 'holders', 'buyPressure', 'curve', 'age', 'momentum'];
-    return comps.map(c => {
+    const out = comps.map(c => {
       const pairs = closed
         .filter(t => t.breakdown[c] != null && isFinite(t.breakdown[c]))
         .map(t => [t.breakdown[c], t.pnlPct]);
@@ -255,7 +255,34 @@ export function componentCorrelations() {
         ? pearson(pairs.map(p => p[0]), pairs.map(p => p[1])) : null;
       return { comp: c, r, n: pairs.length };
     });
+    // m5Change is a journal-level feature (not a score component): high m5 at
+    // entry = post-pump chase (snipe-and-dump pattern). Negative correlation
+    // here teaches the bot to fade those entries over time.
+    const m5pairs = journal
+      .filter(t => t.exitTs != null && t.pnlPct != null && t.m5Change != null && isFinite(t.m5Change))
+      .map(t => [t.m5Change, t.pnlPct]);
+    out.push({
+      comp: 'm5Change',
+      r: m5pairs.length >= 4 ? pearson(m5pairs.map(p => p[0]), m5pairs.map(p => p[1])) : null,
+      n: m5pairs.length,
+    });
+    return out;
   } catch { return []; }
+}
+
+// Learned post-pump penalty: if journal shows high-m5 entries lose money,
+// shave score proportionally. Soft and gradual — no hard block. Pre-pump
+// snipes (low m5 at entry, like Taylor) are unaffected.
+export function m5EntryPenalty(m5) {
+  try {
+    if (m5 == null || !isFinite(m5) || m5 <= 50) return 0;
+    const corr = componentCorrelations().find(c => c.comp === 'm5Change');
+    if (!corr || corr.r == null || corr.n < 10 || corr.r >= -0.15) return 0;
+    // Negative correlation confirmed: scale penalty 0..12 pts by m5 magnitude
+    const strength = Math.min(1, Math.abs(corr.r) * 2);
+    const mag = Math.min(1, (m5 - 50) / 450);
+    return Math.round(12 * strength * mag);
+  } catch { return 0; }
 }
 
 export function journalStats() {
