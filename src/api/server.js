@@ -124,12 +124,27 @@ const styleProfiles = new Map(); // wallet -> { label, profile, ts }
 app.post('/api/learn/wallet', async (req, res) => {
   try {
     const { wallet, label, trades } = req.body || {};
-    if (!wallet || !trades || !Array.isArray(trades)) {
-      return res.status(400).json({ ok: false, error: 'need wallet, label, trades[]' });
+    if (!wallet) {
+      return res.status(400).json({ ok: false, error: 'need wallet' });
     }
-    const profile = analyzeStyle(trades);
-    styleProfiles.set(wallet, { label: label || wallet.slice(0, 8), profile, ts: Date.now() });
-    res.json({ ok: true, wallet, label, profile });
+    let tradeData = trades;
+    // v3.21: auto-pull from chain if no trades provided
+    if (!tradeData || !Array.isArray(tradeData) || !tradeData.length) {
+      try {
+        const { buildTradeHistory } = await import('../lib/walletHistory.js');
+        tradeData = await buildTradeHistory(wallet, 200);
+      } catch (e) {
+        return res.status(500).json({ ok: false, error: 'auto-pull failed: ' + (e.message || e) });
+      }
+    }
+    const profile = analyzeStyle(tradeData);
+    styleProfiles.set(wallet, {
+      label: label || wallet.slice(0, 8),
+      profile,
+      tradeCount: tradeData.length,
+      ts: Date.now(),
+    });
+    res.json({ ok: true, wallet, label: label || wallet.slice(0, 8), profile, trades: tradeData.length });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e && e.message || e) });
   }
