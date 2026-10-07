@@ -20,7 +20,8 @@ import {
 import { initLearning, logKill, confirmKills, getBrainStats } from '../lib/learning.js';
 import { getExitRules } from '../lib/exits.js';
 import { startFlowWatch, getFlowStats } from '../lib/flowWatch.js';
-import { startDbcWatch, fetchDbcPrices, getDbcStats, dbcState } from '../lib/meteora.js';
+import { startNewPoolsWatch, getNewPoolsStats } from '../lib/geckoterminal.js';
+import { fetchDbcPrices } from '../lib/meteora.js';
 import { probePumpPortal, pumpPortalState } from '../lib/pumpportal.js';
 import { recentEvents, floorEmit } from '../lib/events.js';
 
@@ -98,12 +99,12 @@ function injectMint(mint, source) {
   }).catch(() => {});
 }
 
-// v3.20: Meteora DBC launch injection. The launch already carries on-chain
-// price + MC (pre-DexScreener), so it goes straight to the vet queue —
-// no DexScreener round-trip needed.
-function injectDbcLaunch(launch) {
+// v3.20: GeckoTerminal new-pools injection. Launches carry live price + FDV
+// (pre-DexScreener), so they go straight to the vet queue.
+function injectNewPool(launch) {
   if (!launch || !launch.mint || seenMints.has(launch.mint)) return;
   seenMints.set(launch.mint, Date.now());
+  const isDbc = launch.dex === 'meteora-dbc';
   const t = {
     address: launch.mint,
     name: launch.name || 'Unknown',
@@ -112,20 +113,21 @@ function injectDbcLaunch(launch) {
     price: launch.price || null,
     fdv: launch.mc || null,
     mc: launch.mc || null,
-    supply: launch.supply || null,
-    liquidity: null,          // on-curve: the bonding curve IS liquidity
+    supply: null,
+    liquidity: null,          // too new for reliable liq — on-curve treated as liquid
     vol24h: null,              // too new for 24h volume — skips the vol floor
     buys24h: null,
     sells24h: null,
-    createdAt: launch.ts || Date.now(),
-    dex: 'meteora-dbc',
+    createdAt: launch.createdAt || Date.now(),
+    dex: launch.dex || null,
     url: null,
     priceChange: null,
-    graduated: false,          // on-curve, like pre-grad pump.fun
-    _dbc: true,                // DBC-native: skips vol floor, uses on-chain pricing
-    _dbcPool: launch.pool || null,
-    _dbcQuote: launch.quoteMint || null,
-    source: 'meteora-dbc',
+    graduated: false,          // fresh pools are pre-graduation
+    _dbc: isDbc,               // DBC-native: on-chain price refresh available
+    _dbcPool: isDbc ? (launch.pool || null) : null,
+    _dbcQuote: null,
+    _gt: true,                 // GeckoTerminal-sourced: skips vol floor
+    source: 'geckoterminal',
     feeds: ['new'],
   };
   Q.vet.unshiftFront([t]);
@@ -295,7 +297,7 @@ export function getStateSnapshot() {
     events: recentEvents(80),
     queues: queueStats(),
     flow: getFlowStats(),
-    dbc: getDbcStats(),
+    newpools: getNewPoolsStats(),
     judge: getJudgeStats(),
     cycle: { ...cycleStats },
     keys: {
@@ -334,8 +336,8 @@ export async function startLoop() {
   // Smart-flow watcher (dormant without HELIUS_API_KEY).
   startFlowWatch((mint) => injectMint(mint, 'flow'));
 
-  // v3.20: Meteora DBC launch feed (dormant without HELIUS_API_KEY).
-  startDbcWatch((launch) => injectDbcLaunch(launch));
+  // v3.20: GeckoTerminal new-pools feed — all launchpads, 30s poll.
+  startNewPoolsWatch((launch) => injectNewPool(launch));
 
   // Kick off immediately, then on interval.
   scanCycle().catch(() => {});

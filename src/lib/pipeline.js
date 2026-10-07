@@ -141,8 +141,8 @@ export function freeKill(t, cfg) {
   // instead; keep the LP floor for graduated coins with real DEX pools.
   if (t.graduated && !(liq >= cfg.minLiquidityUsd)) return `liq ${fmtUsd(liq)} < ${fmtUsd(cfg.minLiquidityUsd)} floor`;
   // v3.17: skip volume floor for pump.fun-fallback coins (too new for 24h vol).
-  // v3.20: same for Meteora DBC launches — the curve is minutes old.
-  if (!t._pfFallback && !t._dbc) {
+  // v3.20: same for Meteora DBC launches and GeckoTerminal new pools.
+  if (!t._pfFallback && !t._dbc && !t._gt) {
     const vol = t.vol24h || 0;
     if (!(vol >= cfg.minVol24hUsd)) return `vol24h ${fmtUsd(vol)} < ${fmtUsd(cfg.minVol24hUsd)} floor`;
   }
