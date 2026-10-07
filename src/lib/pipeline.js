@@ -280,12 +280,7 @@ export async function vetToken(t, cfg) {
     floorEmit('vet.kill', { mint: t.address, symbol: t.symbol, name: t.name, killPass: 'free', killReason: fk });
     return { verdict: 'KILLED', killReason: fk, killPass: 'free', t };
   }
-  // v3.20: copycat check — kill duplicate symbols riding a real coin's name.
-  const ck = copycatKill(t);
-  if (ck) {
-    floorEmit('vet.kill', { mint: t.address, symbol: t.symbol, name: t.name, killPass: 'copycat', killReason: ck });
-    return { verdict: 'KILLED', killReason: ck, killPass: 'copycat', t };
-  }
+  // v3.20: copycat check REMOVED per user 2026-10-07 — no more copycat killer.
   const tk = tradeKill(t, cfg);
   if (tk) {
     floorEmit('vet.kill', { mint: t.address, symbol: t.symbol, name: t.name, killPass: 'trade', killReason: tk });
