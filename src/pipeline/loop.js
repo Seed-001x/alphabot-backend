@@ -24,6 +24,7 @@ import { startNewPoolsWatch, getNewPoolsStats } from '../lib/geckoterminal.js';
 import { fetchDbcPrices } from '../lib/meteora.js';
 import { probePumpPortal, pumpPortalState } from '../lib/pumpportal.js';
 import { recentEvents, floorEmit } from '../lib/events.js';
+import { initRealBook, loadRealModeFlag, isRealMode } from '../lib/realbook.js';
 
 const VET_PER_CYCLE = 25;
 const RUG_PER_CYCLE = 8;
@@ -230,7 +231,21 @@ async function scanCycle() {
         };
         cycleStats.scored++;
         const { entered } = processResult(p, r, cfg, { silent: false, solPrice: spx });
-        if (entered) cycleStats.entries++;
+        if (entered) {
+          cycleStats.entries++;
+          // v3.24: mirror with real money when realMode is on. Fire-and-forget —
+          // real execution never blocks the paper loop. Fail-closed inside.
+          try {
+            if (isRealMode()) {
+              const paperPos = (p.positions || []).find(x => x.mint === item.address);
+              if (paperPos) {
+                const { realEnter } = await import('../lib/realbook.js');
+                realEnter(paperPos, item, r.score, cfg).catch(e =>
+                  console.error('[loop] realEnter failed:', e.message));
+              }
+            }
+          } catch {}
+        }
       } catch { cycleStats.errors++; }
     }
 
@@ -324,6 +339,23 @@ async function priceTick() {
     const elite = await refreshElite();
     const closed = tick(p, priceMap, elite.swaps, cfg);
     if (closed.length) cycleStats.exits += closed.length;
+    // v3.24: mirror paper exits with real sells (fire-and-forget).
+    if (closed.length) {
+      try {
+        if (isRealMode()) {
+          const { realExit } = await import('../lib/realbook.js');
+          for (const c of closed) {
+            realExit(c, cfg).catch(e =>
+              console.error('[loop] realExit failed:', e.message));
+          }
+        }
+      } catch {}
+    }
+    // v3.24: kill-switch check every tick — equity < 50% of start → realMode OFF.
+    try {
+      const { checkKillSwitch } = await import('../lib/realbook.js');
+      await checkKillSwitch();
+    } catch {}
     snapshotEquity(p, priceMap);
   } catch (e) {
     cycleStats.errors++;
@@ -409,6 +441,9 @@ export async function startLoop() {
   console.log('[loop] aggressive mode:', cfg.aggressiveMode ? 'ON' : 'off');
   await initLearning();
   await initPortfolio(cfg);
+  // v3.24: real-money book — separate from paper, off by default.
+  await initRealBook();
+  await loadRealModeFlag();
   probePumpPortal();
 
   // Smart-flow watcher (dormant without HELIUS_API_KEY).
@@ -490,6 +525,18 @@ export function applyTuningPatch(target, patch) {
 export async function patchTuning(patch) {
   if (!cfg) cfg = loadConfig();
   const applied = applyTuningPatch(cfg, patch);
+  // v3.24: realMode is a boolean toggle, not a numeric tunable. Handled
+  // separately — goes through setRealMode (validates wallet env vars).
+  if (patch && patch.realMode !== undefined) {
+    try {
+      const { setRealMode } = await import('../lib/realbook.js');
+      const out = await setRealMode(!!patch.realMode);
+      applied.realMode = out.on;
+    } catch (e) {
+      console.error('[loop] realMode toggle failed:', e.message);
+      applied.realModeError = e.message;
+    }
+  }
   try {
     const prev = (await kvGetJson('ab_tuning', null)) || {};
     await kvSetJson('ab_tuning', { ...prev, ...applied, ts: Date.now() });
@@ -502,6 +549,15 @@ function tuningSnapshot() {
   for (const k of TUNABLE_KEYS) s[k] = cfg[k];
   s.aggressiveMode = !!cfg.aggressiveMode;
   return s;
+}
+// v3.24: real-mode status for API consumers (async — reads live state).
+export async function realModeStatus() {
+  try {
+    const { isRealMode, isKillSwitched } = await import('../lib/realbook.js');
+    return { realMode: isRealMode(), killSwitched: isKillSwitched() };
+  } catch {
+    return { realMode: false, killSwitched: false };
+  }
 }
 export function getTuning() {
   if (!cfg) cfg = loadConfig();

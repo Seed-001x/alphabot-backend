@@ -1,6 +1,7 @@
 // ALPHABOT backend — Express API entrypoint.
 // Read-only state API (CORS open for the GitHub Pages frontend).
-// Paper trading only. No wallet keys, no signing, no Telegram.
+// Paper trading is the default. Real-money mode (v3.24) is opt-in via
+// tuning {realMode: true} + REAL_WALLET_KEY env — separate book, never mixed.
 
 import express from 'express';
 import { pool, hasDb } from '../db/pool.js';
@@ -115,6 +116,18 @@ app.post('/api/tuning', async (req, res) => {
 app.get('/api/trades', async (req, res) => {
   const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 50));
   res.json({ ts: Date.now(), trades: getClosedTrades(limit) });
+});
+
+// v3.24: real-money book — separate from paper. Read-only snapshot.
+// Never exposes the private key (only the public wallet address).
+app.get('/api/realbook', async (req, res) => {
+  try {
+    const { realBookSnapshot } = await import('../lib/realbook.js');
+    const snap = await realBookSnapshot();
+    res.json({ ok: true, ...snap });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e && e.message || e) });
+  }
 });
 
 // v3.21: Learning Room — wallet style profiles.
