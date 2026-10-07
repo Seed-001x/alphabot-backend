@@ -269,6 +269,11 @@ export async function startLoop() {
     if (saved && saved.on) applyAggressive(cfg, true);
     else if (cfg.aggressiveMode) applyAggressive(cfg, true);
   } catch {}
+  // v3.19: restore user tuning from KV (survives restarts).
+  try {
+    const tuning = await kvGetJson('ab_tuning', null);
+    if (tuning && typeof tuning === 'object') applyTuningPatch(cfg, tuning);
+  } catch {}
   console.log('[loop] aggressive mode:', cfg.aggressiveMode ? 'ON' : 'off');
   await initLearning();
   await initPortfolio(cfg);
@@ -310,4 +315,52 @@ export async function setAggressiveMode(on) {
 
 export function isAggressive() {
   return !!(cfg && cfg.aggressiveMode);
+}
+
+// v3.19: live tuning patch from the control panel. Whitelisted keys only —
+// applied to the running config and persisted to KV so it survives restarts.
+const TUNABLE_KEYS = [
+  'maxMc', 'pumpMaxMc', 'minMc', 'pumpMinMc',
+  'minTokenScore', 'takeProfit', 'stopLoss', 'trailingStop',
+  'maxPositions', 'cooldownMin', 'minVol24hUsd', 'solSizeBase', 'solSizeMid', 'solSizeTop',
+];
+export function applyTuningPatch(target, patch) {
+  const applied = {};
+  for (const k of TUNABLE_KEYS) {
+    if (patch && patch[k] !== undefined) {
+      const n = Number(patch[k]);
+      if (isFinite(n) && n >= 0) { target[k] = n; applied[k] = n; }
+    }
+  }
+  return applied;
+}
+export async function patchTuning(patch) {
+  if (!cfg) cfg = loadConfig();
+  const applied = applyTuningPatch(cfg, patch);
+  try {
+    const prev = (await kvGetJson('ab_tuning', null)) || {};
+    await kvSetJson('ab_tuning', { ...prev, ...applied, ts: Date.now() });
+  } catch {}
+  console.log('[loop] tuning patched:', JSON.stringify(applied));
+  return { ok: true, applied, config: tuningSnapshot() };
+}
+function tuningSnapshot() {
+  const s = {};
+  for (const k of TUNABLE_KEYS) s[k] = cfg[k];
+  s.aggressiveMode = !!cfg.aggressiveMode;
+  return s;
+}
+export function getTuning() {
+  if (!cfg) cfg = loadConfig();
+  return tuningSnapshot();
+}
+
+// v3.19: fund the paper bankroll (default 1 SOL). Fresh cash + equity curve,
+// past closed trades carry over, learning ledgers untouched.
+export async function fundBankroll(sol) {
+  const { resetPortfolio } = await import('../lib/paper.js');
+  let spx = 150;
+  try { spx = await solPrice(); } catch { /* fallback */ }
+  const out = await resetPortfolio(sol || 1, spx);
+  return { ok: true, ...out, solPrice: spx };
 }

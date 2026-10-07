@@ -73,6 +73,30 @@ export function getPortfolio() {
   return P;
 }
 
+// v3.19: fund/reset the paper bankroll WITHOUT touching learning.
+// Past closed trades carry over (history is never deleted); cash, equity
+// curve, positions, and cooldowns reset. Learning ledgers (ab_trade_journal,
+// ab_kill_ledger, ab_learned_weights, ab_creator_ledger) are separate keys
+// and are never touched here.
+export async function resetPortfolio(sol, usdPerSol) {
+  sol = Number(sol);
+  if (!(sol > 0) || sol > 1000) throw new Error('bad sol amount');
+  const spx = (usdPerSol > 0) ? usdPerSol : 150;
+  const startUsd = sol * spx;
+  const old = P || {};
+  const carried = Array.isArray(old.closed) ? old.closed : [];
+  P = {
+    ...freshPortfolio(startUsd, sol),
+    closed: carried,   // history carries over — never deleted
+    fundedAt: Date.now(),
+    fundNote: `v3.19 refuel: ${sol} SOL ≈ $${startUsd.toFixed(0)} @ $${spx.toFixed(0)}/SOL`,
+  };
+  hydrated = true;
+  persist();
+  console.log(`[paper] bankroll reset: ${sol} SOL ≈ $${startUsd.toFixed(0)} — ${carried.length} past trades preserved, learning untouched`);
+  return { sol, startUsd, carriedTrades: carried.length };
+}
+
 const MAX_SIGNALS = 400;
 export function logSignal(p, s) {
   p.signals = [s, ...(p.signals || [])].slice(0, MAX_SIGNALS);
@@ -132,7 +156,7 @@ export function processResult(p, r, cfg, opts = {}) {
   if (cd && now - cd < cfg.cooldownMin * 60000)
     return gate(`cooldown — ${fmtDur(cfg.cooldownMin * 60000 - (now - cd))} left`);
 
-  // v3.13: SOL-denominated sizing, 0.5 SOL book. Score bands only.
+  // v3.19: SOL-denominated sizing, 1 SOL book. Score bands only.
   // 55–74 → 0.10 SOL · 75–84 → 0.15 SOL · 85+ → 0.20 SOL.
   const spx = (opts && opts.solPrice) || 150;
   let solSize;
@@ -140,6 +164,14 @@ export function processResult(p, r, cfg, opts = {}) {
   else if (finalScore >= 75) solSize = cfg.solSizeMid;
   else solSize = cfg.solSizeBase;
   solSize = solSize || 1.0;
+  // v3.19: volume boost — turnover (vol24h / MC) ≥ volBoostTurnover bumps one
+  // size tier. Balls in when there's volume.
+  let volBoosted = false;
+  const turnover = (t.vol24h && t.mc) ? t.vol24h / t.mc : 0;
+  if (turnover >= (cfg.volBoostTurnover || Infinity)) {
+    if (solSize === cfg.solSizeBase) { solSize = cfg.solSizeMid; volBoosted = true; }
+    else if (solSize === cfg.solSizeMid) { solSize = cfg.solSizeTop; volBoosted = true; }
+  }
   const sizeUsd = Math.min(p.cash, solSize * spx);
   if (!(sizeUsd > 1)) return gate(`cash too low (${fmtUsd(p.cash)})`);
   if (!(t.price > 0)) return gate('no price');
@@ -156,6 +188,7 @@ export function processResult(p, r, cfg, opts = {}) {
     feeds: t.feeds || null,
     buyPressure: (r.breakdown && r.breakdown.buyPressure) || null,
     entryVol: t.vol24h || null,
+    volBoosted, turnover: turnover || null,
   };
   p.positions.push(pos);
   // Trade journal: entry snapshot (durable learning).
@@ -169,7 +202,7 @@ export function processResult(p, r, cfg, opts = {}) {
     if (t.creator) noteCreatorLaunchCount(t.creator, 1);
   } catch { /* journal is a nicety */ }
   sig.taken = true;
-  sig.reason = `ENTER ${t.symbol} · score ${finalScore}${researchMod ? ` (${researchMod >= 0 ? '+' : ''}${researchMod} research)` : ''}${r.eliteHit ? ` (+${boost} smart flow)` : ''} · ${solSize.toFixed(2)} SOL (${fmtUsd(sizeUsd)}) @ ${fmtUsd(entryMc)} MC`;
+  sig.reason = `ENTER ${t.symbol} · score ${finalScore}${researchMod ? ` (${researchMod >= 0 ? '+' : ''}${researchMod} research)` : ''}${r.eliteHit ? ` (+${boost} smart flow)` : ''}${volBoosted ? ` (VOL ×${turnover.toFixed(1)} boost)` : ''} · ${solSize.toFixed(2)} SOL (${fmtUsd(sizeUsd)}) @ ${fmtUsd(entryMc)} MC`;
   floorEmit('trade.enter', {
     mint: t.address, symbol: t.symbol, name: t.name,
     score: finalScore, sizeUsd, entryMc, researchMod,

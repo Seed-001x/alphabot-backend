@@ -4,7 +4,7 @@
 
 import express from 'express';
 import { pool, hasDb } from '../db/pool.js';
-import { startLoop, getStateSnapshot, getClosedTrades, cycleStats, setAggressiveMode, isAggressive } from '../pipeline/loop.js';
+import { startLoop, getStateSnapshot, getClosedTrades, cycleStats, setAggressiveMode, isAggressive, fundBankroll, patchTuning, getTuning } from '../pipeline/loop.js';
 import { getBrainStats, resetLearning } from '../lib/learning.js';
 import { getExitRules } from '../lib/exits.js';
 import { loadConfig } from '../lib/config.js';
@@ -68,6 +68,32 @@ app.post('/api/mode', async (req, res) => {
   try {
     const on = !!(req.body && req.body.on);
     const out = await setAggressiveMode(on);
+    res.json({ ok: true, ts: Date.now(), ...out });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e && e.message || e) });
+  }
+});
+
+// v3.19: fund the paper bankroll (POST {sol: 1}). Fresh cash + equity curve;
+// past closed trades carry over and learning ledgers are never touched.
+app.post('/api/bankroll', async (req, res) => {
+  try {
+    const sol = Number(req.body && req.body.sol) || 1;
+    const out = await fundBankroll(sol);
+    res.json({ ok: true, ts: Date.now(), ...out });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e && e.message || e) });
+  }
+});
+
+// v3.19: live tuning from the control panel (POST {patch: {maxMc: 500000}}).
+// Whitelisted keys only; applied live and persisted to KV.
+app.get('/api/tuning', async (req, res) => {
+  res.json({ ok: true, ts: Date.now(), tuning: getTuning() });
+});
+app.post('/api/tuning', async (req, res) => {
+  try {
+    const out = await patchTuning((req.body && req.body.patch) || {});
     res.json({ ok: true, ts: Date.now(), ...out });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e && e.message || e) });
