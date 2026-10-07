@@ -128,11 +128,11 @@ app.post('/api/learn/wallet', async (req, res) => {
       return res.status(400).json({ ok: false, error: 'need wallet' });
     }
     let tradeData = trades;
-    // v3.21: auto-pull from chain if no trades provided
+    // v3.21: auto-pull from chain if no trades provided (1000 swaps for deep history)
     if (!tradeData || !Array.isArray(tradeData) || !tradeData.length) {
       try {
         const { buildTradeHistory } = await import('../lib/walletHistory.js');
-        tradeData = await buildTradeHistory(wallet, 200);
+        tradeData = await buildTradeHistory(wallet, 1000);
       } catch (e) {
         return res.status(500).json({ ok: false, error: 'auto-pull failed: ' + (e.message || e) });
       }

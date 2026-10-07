@@ -16,7 +16,7 @@ export async function fetchWalletSwaps(wallet, limit = 100) {
   let before = null;
   let pages = 0;
 
-  while (out.length < limit && pages < 5) {
+  while (out.length < limit && pages < 12) {
     pages++;
     const params = new URLSearchParams({
       'api-key': key,
