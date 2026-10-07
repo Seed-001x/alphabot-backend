@@ -260,7 +260,13 @@ async function priceTick() {
       const { tokenView } = await import('../lib/dexscreener.js');
       for (const m of mints) {
         const t = tokenView(raw[m]);
-        if (t) priceMap[m] = { price: t.price, mc: t.mc, vol24h: t.vol24h, buys24h: t.buys24h, sells24h: t.sells24h, liquidity: t.liquidity };
+        if (t) {
+          priceMap[m] = { price: t.price, mc: t.mc, vol24h: t.vol24h, buys24h: t.buys24h, sells24h: t.sells24h, liquidity: t.liquidity };
+        } else if (raw[m]) {
+          // DexScreener knows the token but reports no price/MC = dead.
+          // Record explicit zero so the sweeper closes it immediately.
+          priceMap[m] = { price: 0, mc: 0, vol24h: 0, liquidity: 0 };
+        }
       }
     }
     // v3.20: bundle distribution check — every 5 min, re-fetch dossier for
