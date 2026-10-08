@@ -199,8 +199,9 @@ export async function realEnter(paperPos, t, finalScore, cfg) {
     const think = thinkEntry({ ...t, score: finalScore }, cfg, walletUsd);
     solSize = think.solSize;
   } catch { solSize = 0.05; }
-  // Hard cap: 30% of wallet per trade
-  const maxSol = (walletUsd * REAL_MAX_SIZE_PCT) / spx;
+  // Hard cap: configurable via tuning (realMaxSizePct), default 30% of wallet per trade
+  const maxPct = Math.min(0.95, Math.max(0.05, cfg.realMaxSizePct || REAL_MAX_SIZE_PCT));
+  const maxSol = (walletUsd * maxPct) / spx;
   solSize = Math.min(solSize, maxSol);
   // v3.24: slippage learning — if real fills prove execution is expensive,
   // shrink size. The bot learns its true costs from real data.
