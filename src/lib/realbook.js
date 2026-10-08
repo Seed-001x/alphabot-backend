@@ -34,7 +34,21 @@ function persist() {
     `INSERT INTO ab_desk_state (id, state, updated_at) VALUES (2, $1::jsonb, NOW())
      ON CONFLICT (id) DO UPDATE SET state = EXCLUDED.state, updated_at = NOW()`,
     [JSON.stringify(R)]
-  ).catch(() => {});
+  ).catch((e) => console.error('[realbook] persist FAILED:', e.message));
+}
+
+/** Awaitable persist for critical paths (buy/sell/close). Never throws. */
+export async function persistSync() {
+  if (!hasDb || !hydrated || !R) return;
+  try {
+    await pool.query(
+      `INSERT INTO ab_desk_state (id, state, updated_at) VALUES (2, $1::jsonb, NOW())
+       ON CONFLICT (id) DO UPDATE SET state = EXCLUDED.state, updated_at = NOW()`,
+      [JSON.stringify(R)]
+    );
+  } catch (e) {
+    console.error('[realbook] persistSync FAILED:', e.message);
+  }
 }
 
 export function freshRealBook(startUsd, startSol) {
@@ -90,8 +104,9 @@ export async function initRealBook() {
         if (rows.length && rows[0].state && rows[0].state.version === 1) {
           R = rows[0].state;
           hydrated = true;
-          console.log(`[realbook] restored: $${(R.cash || 0).toFixed(2)} cash, ${(R.positions || []).length} open, startSol ${(R.startSol || 0).toFixed(4)} (LOCKED)`);
+          console.log(`[realbook] RESTORED from DB: ${(R.positions || []).length} positions, ${(R.closed || []).length} closed trades, ${(R.fills || []).length} fills, startSol ${(R.startSol || 0).toFixed(4)} (LOCKED)`);
           await restoreFillsFromDb();
+          console.log(`[realbook] after fills restore: ${(R.fills || []).length} total fills`);
           // v3.24: on-chain reconciliation — chain is source of truth.
           // If DB wiped but tokens are on-chain, rebuild positions.
           try { await reconcileOnChain(); } catch (e) {
@@ -184,7 +199,7 @@ async function reconcileOnChain() {
     console.log(`[realbook] reconcile: recovered ${symbol} from on-chain (${h.uiAmount} tokens)`);
   }
   if (added) {
-    persist();
+    await persistSync();
     console.log(`[realbook] reconcile done: +${added} recovered from chain`);
   }
 }
@@ -262,7 +277,7 @@ export async function ensureRealBook() {
   R = freshRealBook(startUsd, st.sol);
   R.wallet = st.address;
   hydrated = true;
-  persist();
+  await persistSync();
   console.log(`[realbook] FIRST INIT — baseline LOCKED: ${st.sol.toFixed(4)} SOL ≈ $${startUsd.toFixed(2)} @ $${spx.toFixed(0)}/SOL`);
   return R;
 }
@@ -530,7 +545,7 @@ export async function realEnter(entry, t, cfg) {
       noteCreatorLaunchCount(t.creator, 1);
     }
   } catch { /* journal is a nicety */ }
-  persist();
+  await persistSync();
   floorEmit('real.enter', { mint: pos.mint, symbol: pos.symbol, solSize, sig: fill.sig, route: fill.route });
   floorEmit('trade.enter', {
     mint, symbol: sym, name: pos.name,
@@ -604,7 +619,7 @@ export async function realClosePosition(mint, exitReason, cfg) {
       const { logTradeExit } = await import('./learning.js');
       logTradeExit(trade0);
     } catch { /* journal is a nicety */ }
-    persist();
+    await persistSync();
     floorEmit('real.unexitable', { mint: pos.mint, symbol: pos.symbol, reason: 'no on-chain balance' });
     return trade0;
   }
@@ -624,7 +639,7 @@ export async function realClosePosition(mint, exitReason, cfg) {
     // holding a dead position forever.
     const fails = (R.sellFailCount = R.sellFailCount || {});
     fails[pos.mint] = (fails[pos.mint] || 0) + 1;
-    persist();
+    await persistSync();
     if (fails[pos.mint] >= 3) {
       const now1 = Date.now();
       const trade1 = {
@@ -646,7 +661,7 @@ export async function realClosePosition(mint, exitReason, cfg) {
         const { logTradeExit } = await import('./learning.js');
         logTradeExit(trade1);
       } catch { /* journal is a nicety */ }
-      persist();
+      await persistSync();
       floorEmit('real.unexitable', { mint: pos.mint, symbol: pos.symbol, reason: 'sell failed 3x' });
       return trade1;
     }
@@ -688,7 +703,7 @@ export async function realClosePosition(mint, exitReason, cfg) {
     const { logTradeExit } = await import('./learning.js');
     logTradeExit(trade);
   } catch { /* journal is a nicety */ }
-  persist();
+  await persistSync();
   floorEmit('real.exit', { mint: pos.mint, symbol: pos.symbol, pnlUsd, sig: fill.sig });
   floorEmit('risk.exit', {
     mint: pos.mint, symbol: pos.symbol, name: pos.name,
@@ -786,7 +801,7 @@ export async function reconcilePositions(priceMap = {}) {
     closed.push(trade);
   }
 
-  if (closed.length) persist();
+  if (closed.length) await persistSync();
   return closed;
 }
 
@@ -816,7 +831,7 @@ export async function checkKillSwitch() {
   const eq = await realEquityUsd();
   if (eq == null) return false;
   R.equity = [...(R.equity || []), { ts: Date.now(), v: eq }].slice(-2000);
-  persist();
+  await persistSync();
   return false;
 }
 
