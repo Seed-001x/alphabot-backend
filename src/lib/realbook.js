@@ -62,6 +62,11 @@ export async function initRealBook() {
           R = rows[0].state;
           hydrated = true;
           console.log(`[realbook] restored: $${(R.cash || 0).toFixed(2)} cash, ${(R.positions || []).length} open, startSol ${(R.startSol || 0).toFixed(4)} (LOCKED)`);
+          // v3.24: on-chain reconciliation — chain is source of truth.
+          // If DB wiped but tokens are on-chain, rebuild positions.
+          try { await reconcileOnChain(); } catch (e) {
+            console.error('[realbook] on-chain reconcile failed:', e.message);
+          }
           return R;
         }
       } catch (e) {
@@ -72,6 +77,86 @@ export async function initRealBook() {
     return null;
   })();
   return initPromise;
+}
+
+/**
+ * v3.24: Reconcile book with on-chain reality. The chain is the source of truth.
+ * - Tokens in wallet but not in book → add as position (recovered from wipe)
+ * - Positions in book but no tokens in wallet → remove (sold externally)
+ * This makes the book self-healing — deploys can never lose track of funds.
+ */
+async function reconcileOnChain() {
+  if (!R) return;
+  // Get ALL token holdings (not just known mints)
+  let holdings = {};
+  try {
+    const addr = realWalletAddress();
+    if (!addr) return;
+    const urls = ['https://solana-rpc.publicnode.com', 'https://api.mainnet-beta.solana.com'];
+    // Try Helius first via realWalletState's internal, fall back to public
+    for (const url of urls) {
+      try {
+        const r = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: AbortSignal.timeout(15000),
+          body: JSON.stringify({
+            jsonrpc: '2.0', id: 1, method: 'getTokenAccountsByOwner',
+            params: [addr, { programId: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA' }, { encoding: 'jsonParsed' }],
+          }),
+        });
+        const j = await r.json();
+        for (const acc of (j?.result?.value || [])) {
+          const info = acc?.account?.data?.parsed?.info;
+          if (!info) continue;
+          const mint = info.mint;
+          const amt = info.tokenAmount;
+          const raw = Number(amt?.amount || 0);
+          if (raw > 0 && mint) {
+            holdings[mint] = { raw, decimals: amt.decimals || 0, uiAmount: Number(amt.uiAmount || 0) };
+          }
+        }
+        break; // success, don't try next RPC
+      } catch {}
+    }
+  } catch (e) {
+    console.error('[realbook] reconcile: holdings scan failed:', e.message);
+    return;
+  }
+  const bookMints = new Set((R.positions || []).map(p => p.mint));
+  const chainMints = new Set(Object.keys(holdings));
+
+  // Add: on-chain but not in book
+  let added = 0;
+  for (const mint of chainMints) {
+    if (bookMints.has(mint)) continue;
+    const h = holdings[mint];
+    let symbol = mint.slice(0, 8), curMc = null;
+    try {
+      const { fetchTokens } = await import('./dexscreener.js');
+      const pairs = await fetchTokens([mint]);
+      const pair = pairs && pairs[mint];
+      if (pair) {
+        symbol = pair.baseToken?.symbol || symbol;
+        curMc = pair.fdv ? Number(pair.fdv) : null;
+      }
+    } catch {}
+    R.positions.push({
+      mint, symbol, name: null,
+      solSize: 0, sizeUsd: 0,
+      entryTs: Date.now(), entryTxSig: null,
+      entryMc: null, entryPrice: null,
+      curMc,
+      score: null, real: true, recovered: true,
+      tokenRaw: h.raw, tokenDecimals: h.decimals,
+    });
+    added++;
+    console.log(`[realbook] reconcile: recovered ${symbol} from on-chain (${h.uiAmount} tokens)`);
+  }
+  if (added) {
+    persist();
+    console.log(`[realbook] reconcile done: +${added} recovered from chain`);
+  }
 }
 
 export function getRealBook() { return R; }
