@@ -145,16 +145,18 @@ export function recordFill(f) {
 export async function avgRealSlippageBps(n = 20) {
   try {
     if (hasDb) {
+      // v3.24: exclude decimal-unit outliers (the 1000x bug) — real slippage never exceeds ±50%
       const { rows } = await pool.query(
         `SELECT AVG(slippage_bps) AS a, COUNT(*) AS c FROM (
-           SELECT slippage_bps FROM ab_real_fills WHERE slippage_bps IS NOT NULL
+           SELECT slippage_bps FROM ab_real_fills
+           WHERE slippage_bps IS NOT NULL AND ABS(slippage_bps) <= 5000
            ORDER BY id DESC LIMIT $1) s`,
         [n]
       );
       if (rows[0] && Number(rows[0].c) > 0) return Number(rows[0].a);
     }
   } catch {}
-  const fills = (R && R.fills || []).filter(f => f.slippageBps != null).slice(-n);
+  const fills = (R && R.fills || []).filter(f => f.slippageBps != null && Math.abs(f.slippageBps) <= 5000).slice(-n);
   if (!fills.length) return null;
   return fills.reduce((a, f) => a + f.slippageBps, 0) / fills.length;
 }
@@ -323,6 +325,9 @@ export async function realEnter(paperPos, t, finalScore, cfg) {
     solSize, sizeUsd,
     entryTxSig: fill.sig,
     quotedOut: fill.quotedOut,
+    // v3.24: store entry MC/price for live P&L display
+    entryMc: t.mc || paperPos.entryMc || null,
+    entryPrice: t.price || null,
     // Mirror paper's adaptive TP/SL for exit decisions
     adaptiveTp: paperPos.adaptiveTp ?? null,
     adaptiveSl: paperPos.adaptiveSl ?? null,
@@ -486,6 +491,25 @@ export async function realBookSnapshot() {
     const tuning = await kvGetJson('ab_tuning', null);
     if (tuning && isFinite(Number(tuning.realMaxSizePct))) tunedMaxPct = Number(tuning.realMaxSizePct);
   } catch {}
+  // v3.24: live prices for real positions — fetch current MC/price per mint
+  // so the UI shows live value, unrealized P&L, multiples
+  let livePrices = {};
+  try {
+    const mints = (R ? R.positions : []).map(p => p.mint).filter(Boolean);
+    if (mints.length) {
+      const { fetchTokens } = await import('./dexscreener.js');
+      const pairs = await fetchTokens(mints);
+      for (const m of mints) {
+        const pair = pairs && pairs[m];
+        if (pair) {
+          livePrices[m] = {
+            price: pair.priceUsd ? Number(pair.priceUsd) : null,
+            mc: pair.fdv ? Number(pair.fdv) : (pair.marketCap ? Number(pair.marketCap) : null),
+          };
+        }
+      }
+    }
+  } catch {}
   return {
     ts: Date.now(),
     enabled: realModeOn && !killSwitched,
@@ -498,13 +522,24 @@ export async function realBookSnapshot() {
     liveSol,
     equity: eq,
     pnlUsd: R && eq != null ? eq - R.startUsd : null,
-    pnlPct: R && eq != null && R.startUsd > 0 ? ((eq - R.startUsd) / R.startUsd) * 100 : null,
-    positions: R ? R.positions.map(p => ({
-      mint: p.mint, symbol: p.symbol, name: p.name,
-      solSize: p.solSize, sizeUsd: p.sizeUsd,
-      entryTs: p.entryTs, entryTxSig: p.entryTxSig,
-      score: p.score, adaptiveTp: p.adaptiveTp, adaptiveSl: p.adaptiveSl,
-    })) : [],
+    pnlPct: R && eq != null && R.startUsd > 0 ? (eq - R.startUsd) / R.startUsd : null,
+    positions: R ? R.positions.map(p => {
+      const lp = livePrices[p.mint] || {};
+      const curMc = lp.mc || null;
+      const entryMc = p.entryMc || null;
+      const multiple = (curMc && entryMc) ? curMc / entryMc : null;
+      return {
+        mint: p.mint, symbol: p.symbol, name: p.name,
+        solSize: p.solSize, sizeUsd: p.sizeUsd,
+        entryTs: p.entryTs, entryTxSig: p.entryTxSig,
+        entryMc, entryPrice: p.entryPrice || null,
+        curMc, curPrice: lp.price || null,
+        multiple,
+        valueNow: multiple != null ? p.sizeUsd * multiple : null,
+        unrealized: multiple != null ? p.sizeUsd * (multiple - 1) : null,
+        score: p.score, adaptiveTp: p.adaptiveTp, adaptiveSl: p.adaptiveSl,
+      };
+    }) : [],
     closed: R ? (R.closed || []).slice(0, 50) : [],
     equityCurve: R ? (R.equity || []).slice(-200) : [],
     avgSlippageBps: avgSlip,

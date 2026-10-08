@@ -188,11 +188,10 @@ export async function buyToken(mint, solAmount, opts = {}) {
 
   // Fill price from the quote's output (actual on-chain may vary slightly;
   // the confirmed tx is the source of truth — signature recorded).
-  const tokensOut = quotedOut / 1e9; // NOTE: assumes 9 decimals — refined below
-  void tokensOut;
-
   floorEmit('real.buy', { mint, solAmount, sig, quotedOut });
-  return { sig, quotedOut, fillPriceSol: lamports / Math.max(1, quotedOut) };
+  // v3.24: fillPriceSol in SOL per token — quotedOut is raw units (6 decimals for pump.fun)
+  const tokensOut = quotedOut / 1e6;
+  return { sig, quotedOut, fillPriceSol: solAmount / Math.max(1e-9, tokensOut) };
 }
 
 /**
