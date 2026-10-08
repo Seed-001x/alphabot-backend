@@ -406,6 +406,20 @@ export async function checkKillSwitch() {
 export async function realBookSnapshot() {
   const eq = R ? await realEquityUsd() : null;
   const avgSlip = await avgRealSlippageBps();
+  // v3.24: show live wallet balance even before first trade (R is null until
+  // ensureRealBook runs). Also reflect tuned guardrails from KV.
+  let liveSol = null, tunedMaxPct = null;
+  try {
+    if (!R && realExecReady()) {
+      const st = await realWalletState();
+      liveSol = st.sol;
+    }
+  } catch {}
+  try {
+    const { kvGetJson } = await import('./storage.js');
+    const tuning = await kvGetJson('ab_tuning', null);
+    if (tuning && isFinite(Number(tuning.realMaxSizePct))) tunedMaxPct = Number(tuning.realMaxSizePct);
+  } catch {}
   return {
     ts: Date.now(),
     enabled: realModeOn && !killSwitched,
@@ -413,8 +427,9 @@ export async function realBookSnapshot() {
     ready: realExecReady(),
     wallet: R ? R.wallet || realWalletAddress() : realWalletAddress(),
     startUsd: R ? R.startUsd : null,
-    startSol: R ? R.startSol : null,
+    startSol: R ? R.startSol : liveSol,
     cash: R ? R.cash : null,
+    liveSol,
     equity: eq,
     pnlUsd: R && eq != null ? eq - R.startUsd : null,
     pnlPct: R && eq != null && R.startUsd > 0 ? ((eq - R.startUsd) / R.startUsd) * 100 : null,
@@ -429,7 +444,7 @@ export async function realBookSnapshot() {
     avgSlippageBps: avgSlip,
     guardrails: {
       maxPositions: REAL_MAX_POSITIONS,
-      maxSizePct: REAL_MAX_SIZE_PCT,
+      maxSizePct: tunedMaxPct || REAL_MAX_SIZE_PCT,
       killSwitchDrawdown: KILL_SWITCH_DRAWDOWN,
     },
   };
