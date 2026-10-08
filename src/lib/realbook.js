@@ -654,30 +654,17 @@ export async function realEquityUsd() {
 }
 
 /**
- * THE KILL SWITCH. If real equity < 50% of starting value → disable realMode
- * permanently (until the user explicitly re-enables). Called every tick.
+ * THE KILL SWITCH — DISABLED per user 2026-10-08 ("let it trade until it cannot anymore").
+ * Still records equity history every tick, but never halts trading.
  */
 export async function checkKillSwitch() {
-  if (!R || R.killSwitched) return false;
-  if (!realModeOn) return false;
+  if (!R) return false;
   const eq = await realEquityUsd();
   if (eq == null) return false;
   R.equity = [...(R.equity || []), { ts: Date.now(), v: eq }].slice(-2000);
-  const floor = R.startUsd * (1 - KILL_SWITCH_DRAWDOWN);
-  if (eq < floor) {
-    R.killSwitched = true;
-    killSwitched = true;
-    realModeOn = false;
-    persist();
-    try {
-      const { kvSetJson } = await import('./storage.js');
-      await kvSetJson('ab_realmode', { on: false, killSwitched: true, ts: Date.now(), equity: eq });
-    } catch {}
-    console.error(`[realbook] 🛑 KILL SWITCH: equity $${eq.toFixed(2)} < 50% of $${R.startUsd.toFixed(2)} start. realMode DISABLED.`);
-    floorEmit('real.killswitch', { equity: eq, startUsd: R.startUsd });
-    return true;
-  }
   persist();
+  return false;
+}
   return false;
 }
 
