@@ -11,6 +11,9 @@ import { thinkEntry, thinkExit } from './freethinker.js';
 import { logTradeEntry, logTradeExit, noteCreatorLaunchCount, m5EntryPenalty } from './learning.js';
 import { fmtUsd, fmtDur } from './fmt.js';
 import { solPrice } from './dexscreener.js';
+// v3.24: static import — no dynamic import race, isRealMode() available synchronously.
+// No cycle: realbook.js does not import paper.js.
+import { isRealMode as realModeCheck, realEnter as realEnterFn, isKillSwitched as realKillCheck } from './realbook.js';
 
 // ------------------------------------------------------------ portfolio state
 let P = null; // in-memory mirror
@@ -231,25 +234,22 @@ export function processResult(p, r, cfg, opts = {}) {
     bundleScoreAtEntry: r.dossier && r.dossier.bundleScore != null ? r.dossier.bundleScore : null,
   };
   p.positions.push(pos);
-  // v3.24: real-money entry — fires from INSIDE processResult so EVERY paper
-  // entry triggers real, regardless of which code path entered. Fire-and-forget,
-  // never blocks paper. Fail-closed inside realEnter.
+  // v3.24 REAL-PRIMARY: real entry fires synchronously-checked, no dynamic
+  // import race. If realMode is on, real is the primary execution — paper
+  // position above is just the record. realEnter is fire-and-forget.
   try {
-    import('./realbook.js').then(({ isRealMode, realEnter, isKillSwitched }) => {
-      if (isRealMode()) {
-        realEnter(pos, t, finalScore, cfg).catch(e =>
-          console.error('[paper] realEnter failed:', e.message));
-      } else {
-        // Visible skip reason — no more silent misses
-        import('./events.js').then(({ floorEmit }) => {
-          floorEmit('real.skip', {
-            mint: pos.mint, symbol: pos.symbol,
-            reason: isKillSwitched() ? 'kill switched' : 'realMode off in loop (flag not loaded?)',
-          });
-        }).catch(() => {});
-      }
-    }).catch(() => {});
-  } catch { /* real hook is a nicety — paper must never break */ }
+    if (realModeCheck()) {
+      realEnterFn(pos, t, finalScore, cfg).catch(e =>
+        console.error('[paper] realEnter failed:', e.message));
+    } else {
+      floorEmit('real.skip', {
+        mint: pos.mint, symbol: pos.symbol,
+        reason: realKillCheck() ? 'kill switched' : 'realMode off',
+      });
+    }
+  } catch (e) {
+    console.error('[paper] real hook error:', e.message);
+  }
   // Trade journal: entry snapshot (durable learning).
   // m5Change captures momentum state at entry — lets learning distinguish
   // pre-pump snipes (low m5, like Taylor @ $13K) from post-pump chases.
