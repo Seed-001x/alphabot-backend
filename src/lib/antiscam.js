@@ -5,7 +5,7 @@
 // else) and fail CLOSED: when uncertain, skip the trade.
 //
 // Gates:
-//  1. holderGate — minimum 300 holders (RugCheck dossier). No exceptions.
+//  1. holderGate — minimum 100 holders (RugCheck dossier). No exceptions.
 //  2. honeypotCheck — Jupiter SELL quote before entry. No route or dust
 //     output = unexitable = skip.
 //  3. lpLockCheck — graduated coins must have >=80% of LP locked/burned.
@@ -13,14 +13,14 @@
 //  4. washSpikeCheck — 90%+ of 24h volume in the last 5 min = fake volume.
 //
 // Score boosts (moverQualityBonus) reward real momentum plays:
-//  +10 holders >= 300 · +8 sustained volume 15+ min · +5 gradual MC climb.
+//  +10 holders >= 100 · +8 sustained volume 15+ min · +5 gradual MC climb.
 
 import { jupQuote } from './realexec.js';
 import { getSnapshot } from './feeds.js';
 import { floorEmit } from './events.js';
 
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
-export const MIN_HOLDERS = 300;
+export const MIN_HOLDERS = 100;
 export const MIN_LP_LOCKED_PCT = 80;
 
 // ---------------------------------------------------------- 1. holder gate
