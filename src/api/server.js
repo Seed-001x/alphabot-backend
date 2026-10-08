@@ -198,6 +198,12 @@ app.post('/api/admin/restore-position', async (req, res) => {
       adaptiveTp: p.adaptiveTp ?? null, adaptiveSl: p.adaptiveSl ?? null,
       score: p.score ?? null, real: true, restored: true,
     });
+    // v3.24: allow baseline correction (startSol/startUsd are sacred — only fix via admin)
+    if (req.body.baselineSol && isFinite(Number(req.body.baselineSol))) {
+      const spx = 150;
+      R.startSol = Number(req.body.baselineSol);
+      R.startUsd = R.startSol * spx;
+    }
     // persist via the module's persist (import the internal)
     const { pool } = await import('../db/pool.js');
     await pool.query(
