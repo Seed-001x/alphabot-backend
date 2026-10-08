@@ -283,6 +283,18 @@ export function tick(p, priceMap, eliteSwaps, cfg) {
   try { rules = getExitRules(cfg); } catch { rules = null; }
   for (const pos of (p.positions || [])) {
     const t = priceMap[pos.mint];
+    // v3.24: MAX HOLD TIME — memecoin that hasn't hit TP in 4h is a zombie.
+    // Close it regardless of what the price feed claims.
+    const holdMs = now - pos.entryTs;
+    if (holdMs > 4 * 3600000) {
+      pos.exitMc = t?.mc || 0; pos.exitTs = now;
+      pos.multiple = pos.entryMc > 0 ? (t?.mc || 0) / pos.entryMc : 0;
+      pos.exitReason = `🧹 zombie — held ${Math.round(holdMs/3600000)}h without TP`;
+      pos.pnlUsd = pos.sizeUsd * (pos.multiple - 1);
+      closed.push(pos);
+      try { logTradeExit({ ...pos, mint: pos.mint }); } catch {}
+      continue;
+    }
     // DEAD POSITION SWEEPER: if no price data for 15+ min, or price is 0,
     // the coin is dead. Close it instead of holding a zombie forever.
     if (!t || !t.price || !t.mc) {

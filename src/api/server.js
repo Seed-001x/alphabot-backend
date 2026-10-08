@@ -142,6 +142,39 @@ app.get('/api/realbook/dryrun', async (req, res) => {
   }
 });
 
+// v3.24: force-close paper positions (admin — for zombie/rugged positions
+// the sweeper misses). POST { mints: [...] } or { all: true }.
+app.post('/api/admin/close-positions', async (req, res) => {
+  try {
+    const { getDesk } = await import('../lib/paper.js');
+    const p = getDesk();
+    if (!p) return res.status(500).json({ ok: false, error: 'no desk' });
+    const { mints, all } = req.body || {};
+    const now = Date.now();
+    const closed = [];
+    const keep = [];
+    for (const pos of (p.positions || [])) {
+      if (all || (mints && mints.includes(pos.mint))) {
+        pos.exitMc = 0; pos.exitTs = now; pos.multiple = 0;
+        pos.exitReason = '🧹 admin force-close (zombie)';
+        pos.pnlUsd = -pos.sizeUsd;
+        closed.push({ symbol: pos.symbol, mint: pos.mint });
+      } else {
+        keep.push(pos);
+      }
+    }
+    p.positions = keep;
+    // persist
+    try {
+      const { saveDesk } = await import('../lib/paper.js');
+      if (saveDesk) await saveDesk(p);
+    } catch {}
+    res.json({ ok: true, closed: closed.length, symbols: closed.map(c => c.symbol) });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e && e.message || e) });
+  }
+});
+
 // v3.21: Learning Room — wallet style profiles.
 import { analyzeStyle, synthesizeStrategy } from '../lib/walletAnalysis.js';
 const styleProfiles = new Map(); // wallet -> { label, profile, ts }
