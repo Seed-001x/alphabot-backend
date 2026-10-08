@@ -229,6 +229,27 @@ app.post('/api/admin/restore-position', async (req, res) => {
   }
 });
 
+// v3.24: manual sell — user hits SELL on a real position.
+// POST { mint } → sells entire position via Jupiter, records close.
+app.post('/api/admin/sell-position', async (req, res) => {
+  try {
+    const { realManualSell } = await import('../lib/realbook.js');
+    const { mint } = req.body || {};
+    if (!mint) return res.status(400).json({ ok: false, error: 'mint required' });
+    // cfg from tuning (slippage, priority fee)
+    let cfg = {};
+    try {
+      const { kvGetJson } = await import('../lib/storage.js');
+      cfg = (await kvGetJson('ab_tuning', {})) || {};
+    } catch {}
+    const trade = await realManualSell(mint, cfg);
+    if (!trade) return res.json({ ok: false, error: 'position not found or sell failed — check logs' });
+    res.json({ ok: true, symbol: trade.symbol, pnlUsd: trade.pnlUsd, txSig: trade.exitTxSig });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e && e.message || e) });
+  }
+});
+
 // v3.21: Learning Room — wallet style profiles.
 import { analyzeStyle, synthesizeStrategy } from '../lib/walletAnalysis.js';
 const styleProfiles = new Map(); // wallet -> { label, profile, ts }

@@ -390,8 +390,20 @@ export async function realEnter(paperPos, t, finalScore, cfg) {
  * position closes AND a matching real position is open.
  */
 export async function realExit(paperTrade, cfg) {
+  return realClosePosition(paperTrade.mint, paperTrade.exitReason || 'mirrored paper exit', cfg);
+}
+
+/**
+ * v3.24: manually close a real position (user hits SELL button).
+ * Same execution path as realExit, but user-initiated.
+ */
+export async function realManualSell(mint, cfg = {}) {
+  return realClosePosition(mint, '👆 manual sell', cfg);
+}
+
+async function realClosePosition(mint, exitReason, cfg) {
   if (!R) return null;
-  const idx = (R.positions || []).findIndex(x => x.mint === paperTrade.mint);
+  const idx = (R.positions || []).findIndex(x => x.mint === mint);
   if (idx < 0) return null;
   const pos = R.positions[idx];
 
@@ -436,7 +448,7 @@ export async function realExit(paperTrade, cfg) {
     entryTxSig: pos.entryTxSig, exitTxSig: fill.sig,
     entryTs: pos.entryTs, exitTs: Date.now(),
     holdMs: Date.now() - pos.entryTs,
-    exitReason: paperTrade.exitReason || 'mirrored paper exit',
+    exitReason,
     score: pos.score,
     real: true,
   };
