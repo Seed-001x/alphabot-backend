@@ -142,7 +142,7 @@ async function confirmTx(sig, timeoutMs = 45000) {
  */
 export async function buyToken(mint, solAmount, opts = {}) {
   const slippageBps = opts.slippageBps ?? DEFAULT_SLIPPAGE_BPS;
-  const priorityFee = opts.priorityFeeLamports ?? 50000; // ~fast inclusion
+  const priorityFee = opts.priorityFeeLamports ?? 500000; // 0.0005 SOL — fast inclusion preset
   const lamports = Math.floor(solAmount * 1e9);
   if (!(lamports > 0)) throw new Error('realexec: bad solAmount');
 
@@ -170,7 +170,7 @@ export async function buyToken(mint, solAmount, opts = {}) {
  */
 export async function sellToken(mint, rawAmount, decimals, opts = {}) {
   const slippageBps = opts.slippageBps ?? DEFAULT_SLIPPAGE_BPS;
-  const priorityFee = opts.priorityFeeLamports ?? 50000;
+  const priorityFee = opts.priorityFeeLamports ?? 500000; // 0.0005 SOL — fast inclusion preset
   if (!(Number(rawAmount) > 0)) throw new Error('realexec: bad token amount');
 
   const quote = await jupQuote(mint, SOL_MINT, String(rawAmount), slippageBps);

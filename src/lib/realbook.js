@@ -234,7 +234,10 @@ export async function realEnter(paperPos, t, finalScore, cfg) {
   console.log(`[realbook] BUY ${t.symbol} ${solSize.toFixed(4)} SOL (score ${finalScore})`);
   let fill;
   try {
-    fill = await buyToken(paperPos.mint, solSize, { slippageBps: Math.round((cfg.slippage || 0.20) * 10000) });
+    fill = await buyToken(paperPos.mint, solSize, {
+      slippageBps: Math.round((cfg.slippage || 0.20) * 10000),
+      priorityFeeLamports: cfg.priorityFeeLamports || 500000,
+    });
   } catch (e) {
     console.error('[realbook] buy FAILED (fail-closed):', e.message);
     floorEmit('real.buy_fail', { mint: paperPos.mint, symbol: t.symbol, error: e.message });
@@ -305,8 +308,10 @@ export async function realExit(paperTrade, cfg) {
   console.log(`[realbook] SELL ${pos.symbol} (${tokenBal.raw} base units)`);
   let fill;
   try {
-    fill = await sellToken(pos.mint, String(tokenBal.raw), tokenBal.decimals,
-      { slippageBps: Math.round((cfg.slippage || 0.20) * 10000) });
+    fill = await sellToken(pos.mint, String(tokenBal.raw), tokenBal.decimals, {
+      slippageBps: Math.round((cfg.slippage || 0.20) * 10000),
+      priorityFeeLamports: cfg.priorityFeeLamports || 500000,
+    });
   } catch (e) {
     console.error('[realbook] sell FAILED:', e.message);
     floorEmit('real.sell_fail', { mint: pos.mint, symbol: pos.symbol, error: e.message });
