@@ -202,11 +202,15 @@ async function scanCycle() {
         if (settled.status !== 'fulfilled') { cycleStats.errors++; continue; }
         try {
           const r = settled.value;
-          // v3.29: record the vet outcome in the token registry so the next
-          // cycle can decide whether a re-vet is worthwhile.
+          // v3.30: record the vet outcome in the token registry so the next
+          // cycle can decide whether a re-vet is worthwhile. Kill reason
+          // drives REJECTED_TEMPORARY vs REJECTED_RISK classification.
           try {
             const { registryRecordVet } = await import('../lib/registry.js');
-            registryRecordVet(t.address, r.verdict, t.mc);
+            registryRecordVet(t.address, r.verdict, t.mc, {
+              killReason: r.killReason || null,
+              symbol: t.symbol, name: t.name,
+            });
           } catch { /* registry is additive */ }
           if (r.verdict === 'KILLED') {
             cycleStats.killed++;
@@ -447,6 +451,13 @@ export async function startLoop() {
   } catch {}
   console.log('[loop] aggressive mode:', cfg.aggressiveMode ? 'ON' : 'off');
   await initLearning();
+  // v3.30: hydrate the persistent token registry (survives deploys).
+  try {
+    const { initRegistry } = await import('../lib/registry.js');
+    await initRegistry();
+  } catch (e) {
+    console.error('[loop] registry init failed (in-memory mode):', e.message);
+  }
   // v3.25: paper portfolio removed — real book is the only ledger.
   await initRealBook();
   await loadRealModeFlag();

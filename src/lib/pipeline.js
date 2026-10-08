@@ -60,12 +60,30 @@ export async function scanTokens() {
       mc: c.usdMc || 0, vol24h: c.vol24h || 0,
     })));
   } catch { /* movers is additive */ }
-  // v3.29: touch the token registry for every discovered mint so nothing
-  // disappears after one look.
+  // v3.30: touch the token registry for every discovered mint so nothing
+  // disappears after one look. Graduated PumpSwap coins update the EXISTING
+  // record's venue (no duplicate identities across venues).
   try {
-    const { registryTouch, registryPrune } = await import('./registry.js');
-    for (const f of [...pumpLatest, ...pumpTop, ...pumpMovers, ...pumpGraduated, ...fresh]) {
-      if (f && f.address) registryTouch(f.address, f.usdMc || f.usd_market_cap || 0);
+    const { registryTouch, registrySetVenue, registryPrune } = await import('./registry.js');
+    const feedTags = [
+      [pumpLatest, 'pump-latest', 'bonding_curve'],
+      [pumpTop, 'pump-top', 'bonding_curve'],
+      [pumpMovers, 'pump-movers', 'bonding_curve'],
+      [pumpGraduated, 'pumpswap', 'pumpswap'],
+      [fresh, 'rugcheck-fresh', 'bonding_curve'],
+    ];
+    for (const [feed, source, venue] of feedTags) {
+      for (const f of (feed || [])) {
+        if (!f || !f.address) continue;
+        registryTouch(f.address, f.usdMc || f.usd_market_cap || 0, {
+          symbol: f.symbol, name: f.name, source, venue,
+        });
+      }
+    }
+    // Graduation transitions: a mint seen on pumpswap that was previously
+    // tracked as bonding_curve gets its venue updated (new evidence → re-vet).
+    for (const f of (pumpGraduated || [])) {
+      if (f && f.address) registrySetVenue(f.address, 'pumpswap').catch(() => {});
     }
     registryPrune();
   } catch { /* registry is additive */ }
