@@ -123,6 +123,11 @@ export async function processSignal(r, cfg, opts = {}) {
   if (!(solSize > 0)) return gate('bad size');
   if (!(t.price > 0)) return gate('no price');
 
+  // v3.26: Start honeypot check EARLY (parallel) — runs during thinker/entry prep.
+  const hpPromise = honeypotCheck(t.address, 6).catch(e => ({
+    pass: false, reason: `honeypot check errored — uncertain, skip`
+  }));
+
   // v3.22 FREE THINKER: per-coin adaptive TP/SL/size.
   let adaptiveReasoning = [];
   let adaptiveTp = null, adaptiveSl = null;
@@ -155,20 +160,12 @@ export async function processSignal(r, cfg, opts = {}) {
     bundleAtEntry: r.dossier && r.dossier.bundlePct != null ? r.dossier.bundlePct : null,
   };
 
-  // v3.26 ANTISCAM: honeypot simulation — get a Jupiter SELL quote before
-  // committing real SOL. No route or dust output = unexitable = skip.
-  try {
-    const hp = await honeypotCheck(t.address, 6);
-    if (!hp.pass) {
-      sig.reason = `SCORED ${finalScore} · no entry: ${hp.reason}`;
-      floorEmit('trade.skip', { mint: t.address, symbol: t.symbol, name: t.name, score: finalScore, reason: hp.reason });
-      return done(sig, false);
-    }
-  } catch (e) {
-    // Honeypot check itself errored (not a fail) — fail closed: skip.
-    const reason = 'honeypot check errored — uncertain, skip';
-    sig.reason = `SCORED ${finalScore} · no entry: ${reason}`;
-    floorEmit('trade.skip', { mint: t.address, symbol: t.symbol, name: t.name, score: finalScore, reason });
+  // v3.26 ANTISCAM: honeypot simulation — await the parallel check started earlier.
+  // No route or dust output = unexitable = skip.
+  const hp = await hpPromise;
+  if (!hp.pass) {
+    sig.reason = `SCORED ${finalScore} · no entry: ${hp.reason}`;
+    floorEmit('trade.skip', { mint: t.address, symbol: t.symbol, name: t.name, score: finalScore, reason: hp.reason });
     return done(sig, false);
   }
 
