@@ -42,11 +42,16 @@ export async function scanTokens() {
     fetchLatestBoosts(60),
   ]);
   // v3.23: record top-coin snapshots for movers strategy (dip/breakout detection)
+  // v3.27: also record from the movers feed (mid-cap runners)
   try {
     const { recordMoverSnapshot } = await import('./movers.js');
     recordMoverSnapshot(pumpTop.map(c => ({
       address: c.address, symbol: c.symbol,
       mc: c.usd_market_cap || 0, vol24h: c.volume_24h || 0,
+    })));
+    recordMoverSnapshot(pumpMovers.map(c => ({
+      address: c.address, symbol: c.symbol,
+      mc: c.usdMc || c.usd_market_cap || 0, vol24h: c.volume_24h || 0,
     })));
   } catch { /* movers is additive */ }
   const meta = new Map();

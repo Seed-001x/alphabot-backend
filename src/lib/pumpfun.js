@@ -81,10 +81,11 @@ export function fetchPumpTop(limit = 40) {
   return pfCoins({ sort: 'market_cap', order: 'DESC', limit });
 }
 
-// MOVERS feed: pump.fun coins sorted by momentum (price change).
+// MOVERS feed: pump.fun coins sorted by recent trade activity.
 // This catches mid-cap runners like the ones on pump.fun's Movers tab.
+// (API doesn't support price_change sort; last_trade_timestamp is the proxy.)
 export function fetchPumpMovers(limit = 60) {
-  return pfCoins({ sort: 'price_change_24h', order: 'DESC', limit });
+  return pfCoins({ sort: 'last_trade_timestamp', order: 'DESC', limit });
 }
 
 // RugCheck firehose (as in the frontend desk).
