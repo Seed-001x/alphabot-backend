@@ -40,9 +40,9 @@ export const DEFAULT_CONFIG = {
   // Volume boost: turnover (vol24h/mc) ≥ volBoostTurnover bumps one size tier —
   // balls in when there's volume.
   maxPositions: 5,
-  solSizeBase: 0.10,
-  solSizeMid: 0.15,
-  solSizeTop: 0.20,
+  solSizeBase: 0.05,
+  solSizeMid: 0.075,
+  solSizeTop: 0.10,
   volBoostTurnover: 2.0,   // v3.19: 24h volume ≥ 2× MC → size up one tier
   // Early-ape: under $100k MC + score ≥ 80 → 0.15 SOL conviction size.
   // (Universe is now sub-$100k, so this overlaps the bands — kept for tuning.)
