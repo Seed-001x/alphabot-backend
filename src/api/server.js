@@ -185,9 +185,21 @@ app.post('/api/admin/restore-position', async (req, res) => {
     if (!R) return res.status(500).json({ ok: false, error: 'no book' });
     const p = req.body && req.body.position;
     if (!p || !p.mint) return res.status(400).json({ ok: false, error: 'position.mint required' });
-    // Don't duplicate
-    if ((R.positions || []).some(x => x.mint === p.mint)) {
-      return res.json({ ok: true, restored: false, reason: 'already tracked' });
+    // Don't duplicate — but allow updating missing fields on existing
+    const existing = (R.positions || []).find(x => x.mint === p.mint);
+    if (existing) {
+      // Backfill missing fields (entryMc, entryPrice, etc.)
+      if (p.entryMc && !existing.entryMc) existing.entryMc = p.entryMc;
+      if (p.entryPrice && !existing.entryPrice) existing.entryPrice = p.entryPrice;
+      if (p.quotedOut && !existing.quotedOut) existing.quotedOut = p.quotedOut;
+      // persist
+      const { pool: pool2 } = await import('../db/pool.js');
+      await pool2.query(
+        `INSERT INTO ab_desk_state (id, state, updated_at) VALUES (2, $1::jsonb, NOW())
+         ON CONFLICT (id) DO UPDATE SET state = EXCLUDED.state, updated_at = NOW()`,
+        [JSON.stringify(R)]
+      ).catch(() => {});
+      return res.json({ ok: true, restored: false, updated: true, reason: 'backfilled missing fields' });
     }
     R.positions.push({
       mint: p.mint, symbol: p.symbol || 'UNK', name: p.name || null,
