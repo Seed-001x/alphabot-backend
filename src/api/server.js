@@ -130,6 +130,18 @@ app.get('/api/realbook', async (req, res) => {
   }
 });
 
+// v3.24: dry-run the real entry path — exercises every check without spending.
+// Returns step-by-step diagnostic to verify real trading is wired correctly.
+app.get('/api/realbook/dryrun', async (req, res) => {
+  try {
+    const { realDryRun } = await import('../lib/realbook.js');
+    const result = await realDryRun();
+    res.json({ ok: true, ...result });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e && e.message || e) });
+  }
+});
+
 // v3.21: Learning Room — wallet style profiles.
 import { analyzeStyle, synthesizeStrategy } from '../lib/walletAnalysis.js';
 const styleProfiles = new Map(); // wallet -> { label, profile, ts }

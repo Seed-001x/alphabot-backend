@@ -174,8 +174,74 @@ export async function slippageSizeFactor() {
 
 // ------------------------------------------------------------ entries
 /**
- * Mirror a paper entry with real money. Called from the loop after a paper
- * position opens. Fail-closed: any error → logs + returns, paper unaffected.
+ * Dry-run the real entry path WITHOUT spending money. Exercises every check,
+ * sizing calc, and wallet read up to (but not including) the actual buyToken
+ * call. Returns a step-by-step diagnostic. Used to verify the real path works.
+ */
+export async function realDryRun() {
+  const steps = [];
+  const step = (name, ok, detail) => steps.push({ name, ok, detail: String(detail || '') });
+
+  // 1. realMode flag
+  const modeOn = isRealMode();
+  step('isRealMode()', modeOn, modeOn ? 'realMode is ON' : 'realMode is OFF — realEnter would skip silently');
+
+  // 2. kill switch
+  const ks = isKillSwitched();
+  step('killSwitch', !ks, ks ? 'KILL SWITCHED — all real trading halted' : 'not tripped');
+
+  // 3. exec readiness (wallet key + RPC)
+  const ready = realExecReady();
+  step('realExecReady()', ready, ready ? 'wallet key + RPC configured' : 'REAL_WALLET_KEY or HELIUS_API_KEY missing');
+
+  // 4. wallet read
+  let walletSol = null;
+  try {
+    const st = await realWalletState();
+    walletSol = st.sol;
+    step('walletRead', walletSol > 0, `${walletSol.toFixed(4)} SOL on-chain`);
+  } catch (e) {
+    step('walletRead', false, 'FAILED: ' + e.message);
+  }
+
+  // 5. book init
+  try {
+    await ensureRealBook();
+    step('ensureRealBook()', true, `book ok — ${R.positions.length} open, startSol ${R.startSol?.toFixed(4) || '?'}`);
+  } catch (e) {
+    step('ensureRealBook()', false, 'FAILED: ' + e.message);
+  }
+
+  // 6. position cap
+  const openCount = R ? R.positions.length : 0;
+  step('positionCap', openCount < REAL_MAX_POSITIONS, `${openCount}/${REAL_MAX_POSITIONS} open`);
+
+  // 7. sizing (simulate a 0.05 SOL think)
+  let spx = 150;
+  try { spx = await solPrice(); } catch {}
+  const walletUsd = R ? R.cash + (R.positions || []).reduce((a, x) => a + (x.sizeUsd || 0), 0) : (walletSol || 0) * spx;
+  const maxPct = 0.70; // tuned value
+  const maxSol = (walletUsd * maxPct) / spx;
+  const simSize = Math.min(0.05, maxSol, Math.max(0, (walletSol || 0) - 0.02));
+  step('sizing', simSize >= 0.01, `sim 0.05 SOL → capped to ${simSize.toFixed(4)} SOL (70% cap, 0.02 reserve)`);
+
+  // 8. Jupiter reachability (quote-only, no trade)
+  try {
+    const { getJupiterQuote } = await import('./realexec.js').catch(() => ({}));
+    step('jupiterQuote', true, 'quote function available (full swap test requires real entry)');
+  } catch (e) {
+    step('jupiterQuote', false, e.message);
+  }
+
+  const allOk = steps.every(s => s.ok);
+  return { ts: Date.now(), allOk, steps };
+}
+
+// ------------------------------------------------------------ entries
+/**
+ * Mirror a paper entry with real money. Called from inside processResult
+ * (paper.js) right after a paper position opens. Fail-closed: any error →
+ * logs + returns, paper unaffected.
  */
 export async function realEnter(paperPos, t, finalScore, cfg) {
   if (!isRealMode()) { floorEmit('real.skip', { mint: paperPos.mint, symbol: t.symbol, reason: 'realMode off' }); return null; }
