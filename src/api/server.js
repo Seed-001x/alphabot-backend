@@ -144,6 +144,18 @@ app.get('/api/realbook/dryrun', async (req, res) => {
 // the sweeper can't sell on-chain, e.g. zero liquidity). This removes them
 // from the book WITHOUT an on-chain sell — use /api/admin/sell-position
 // first when a sell is possible. POST { mints: [...] } or { all: true }.
+// v3.25: re-enable real mode after kill switch (POST {on: true}).
+app.post('/api/admin/realmode', async (req, res) => {
+  try {
+    const { setRealMode } = await import('../lib/realbook.js');
+    const on = !!(req.body && req.body.on);
+    await setRealMode(on);
+    res.json({ ok: true, on, ts: Date.now() });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e && e.message || e) });
+  }
+});
+
 app.post('/api/admin/close-positions', async (req, res) => {
   try {
     const { ensureRealBook, getRealBook } = await import('../lib/realbook.js');

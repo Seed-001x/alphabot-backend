@@ -49,7 +49,12 @@ export function thinkEntry(t, cfg, bankrollUsd) {
   sizePct = clamp(sizePct, 0.05, 0.30);
 
   // Convert to SOL for the engine
-  const sizeUsd = (bankrollUsd || 100) * sizePct;
+  let sizeUsd = (bankrollUsd || 100) * sizePct;
+  // v3.25: $2.50 minimum per play (user: fees eat sub-$2 positions alive)
+  if (sizeUsd < 2.50) {
+    sizeUsd = 2.50;
+    reasoning.push(`bumped to $2.50 minimum`);
+  }
   let solSize = sizeUsd / spx;
   solSize = Math.round(solSize * 100) / 100;
 
