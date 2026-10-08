@@ -233,18 +233,8 @@ async function scanCycle() {
         const { entered } = processResult(p, r, cfg, { silent: false, solPrice: spx });
         if (entered) {
           cycleStats.entries++;
-          // v3.24: mirror with real money when realMode is on. Fire-and-forget —
-          // real execution never blocks the paper loop. Fail-closed inside.
-          try {
-            if (isRealMode()) {
-              const paperPos = (p.positions || []).find(x => x.mint === item.address);
-              if (paperPos) {
-                const { realEnter } = await import('../lib/realbook.js');
-                realEnter(paperPos, item, r.score, cfg).catch(e =>
-                  console.error('[loop] realEnter failed:', e.message));
-              }
-            }
-          } catch {}
+          // v3.24: real-money hook now lives INSIDE processResult (paper.js) —
+          // every entry fires real automatically. Nothing needed here.
         }
       } catch { cycleStats.errors++; }
     }

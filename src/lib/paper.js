@@ -231,6 +231,17 @@ export function processResult(p, r, cfg, opts = {}) {
     bundleScoreAtEntry: r.dossier && r.dossier.bundleScore != null ? r.dossier.bundleScore : null,
   };
   p.positions.push(pos);
+  // v3.24: real-money entry — fires from INSIDE processResult so EVERY paper
+  // entry triggers real, regardless of which code path entered. Fire-and-forget,
+  // never blocks paper. Fail-closed inside realEnter.
+  try {
+    import('./realbook.js').then(({ isRealMode, realEnter }) => {
+      if (isRealMode()) {
+        realEnter(pos, t, finalScore, cfg).catch(e =>
+          console.error('[paper] realEnter failed:', e.message));
+      }
+    }).catch(() => {});
+  } catch { /* real hook is a nicety — paper must never break */ }
   // Trade journal: entry snapshot (durable learning).
   // m5Change captures momentum state at entry — lets learning distinguish
   // pre-pump snipes (low m5, like Taylor @ $13K) from post-pump chases.
