@@ -665,8 +665,6 @@ export async function checkKillSwitch() {
   persist();
   return false;
 }
-  return false;
-}
 
 // ------------------------------------------------------------ read API
 export async function realBookSnapshot() {
