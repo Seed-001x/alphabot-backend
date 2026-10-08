@@ -511,6 +511,7 @@ const TUNABLE_KEYS = [
   'minTokenScore', 'takeProfit', 'stopLoss', 'trailingStop',
   'maxPositions', 'cooldownMin', 'minVol24hUsd', 'solSizeBase', 'solSizeMid', 'solSizeTop',
   'maxDevPct', 'maxTopHolderPct', 'maxTop10Pct', 'maxHoldHours', // v3.20: smart shield tuning
+  'realMaxSizePct', 'priorityFeeLamports', // v3.24: real-money tunables
 ];
 export function applyTuningPatch(target, patch) {
   const applied = {};
