@@ -13,8 +13,26 @@ import bs58 from 'bs58';
 import { getKey as heliusKey, SOL_MINT } from './helius.js';
 import { floorEmit } from './events.js';
 
-const JUP_QUOTE = 'https://quote-api.jup.ag/v6/quote';
-const JUP_SWAP = 'https://quote-api.jup.ag/v6/swap';
+const JUP_QUOTE = 'https://api.jup.ag/swap/v1/quote';
+const JUP_SWAP = 'https://api.jup.ag/swap/v1/swap';
+
+// v3.24: fetch with retry — Jupiter can flake, don't fail a real trade on one bad request
+async function fetchRetry(url, opts = {}, retries = 3) {
+  let lastErr = null;
+  for (let i = 0; i < retries; i++) {
+    try {
+      const r = await fetch(url, opts);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r;
+    } catch (e) {
+      lastErr = e;
+      if (i < retries - 1) {
+        await new Promise(r => setTimeout(r, 1000 * (i + 1))); // 1s, 2s backoff
+      }
+    }
+  }
+  throw lastErr || new Error('fetch failed after retries');
+}
 
 // User's paper default — real trades use the same slippage tolerance.
 const DEFAULT_SLIPPAGE_BPS = 2000; // 20%
@@ -59,15 +77,14 @@ function rpcUrl() {
 async function jupQuote(inputMint, outputMint, amount, slippageBps) {
   const u = `${JUP_QUOTE}?inputMint=${inputMint}&outputMint=${outputMint}` +
     `&amount=${amount}&slippageBps=${slippageBps}&onlyDirectRoutes=false`;
-  const r = await fetch(u, { signal: AbortSignal.timeout(15000) });
-  if (!r.ok) throw new Error(`jupiter quote failed: ${r.status}`);
+  const r = await fetchRetry(u, { signal: AbortSignal.timeout(15000) });
   const q = await r.json();
   if (!q || !q.outAmount) throw new Error('jupiter: no route');
   return q;
 }
 
 async function jupSwapTx(quoteResponse, userPublicKey, prioritizationFeeLamports) {
-  const r = await fetch(JUP_SWAP, {
+  const r = await fetchRetry(JUP_SWAP, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     signal: AbortSignal.timeout(20000),
@@ -79,7 +96,6 @@ async function jupSwapTx(quoteResponse, userPublicKey, prioritizationFeeLamports
       dynamicComputeUnitLimit: true,
     }),
   });
-  if (!r.ok) throw new Error(`jupiter swap failed: ${r.status}`);
   const j = await r.json();
   if (!j || !j.swapTransaction) throw new Error('jupiter: no swap transaction');
   return j.swapTransaction; // base64 VersionedTransaction
