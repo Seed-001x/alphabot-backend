@@ -13,8 +13,7 @@
 
 import { pool, hasDb } from '../db/pool.js';
 import { floorEmit } from './events.js';
-import { thinkEntry } from './freethinker.js';
-import { buyToken, sellToken, realWalletState, realWalletAddress, realExecReady } from './realexec.js';
+import { buyToken, sellToken, realWalletState, realWalletAddress, realExecReady, PRIORITY_FEE_LAMPORTS, JITO_TIP_LAMPORTS } from './realexec.js';
 import { solPrice } from './dexscreener.js';
 
 const REAL_MAX_POSITIONS = 3;
@@ -46,6 +45,7 @@ export function freshRealBook(startUsd, startSol) {
     positions: [],
     closed: [],
     fills: [],                // real-fill records: quoted vs actual
+    cooldowns: {},            // v3.25: mint -> ts, same cooldown semantics as the old paper book
     killSwitched: false,
     createdAt: Date.now(),
     version: 1,
@@ -354,34 +354,47 @@ export async function realDryRun() {
 
 // ------------------------------------------------------------ entries
 /**
- * Mirror a paper entry with real money. Called from inside processResult
- * (paper.js) right after a paper position opens. Fail-closed: any error →
- * logs + returns, paper unaffected.
+ * Execute a real entry. v3.25 REAL-ONLY: called directly from the signal
+ * pipeline (realtrade.processSignal) — no paper leg. The entry descriptor
+ * carries the pipeline's scoring/sizing decision; this function applies the
+ * real-money guardrails (caps, wallet balance, kill switch) and executes.
+ *
+ * @param {object} entry - { mint, symbol, name, solSize, sizeUsd, entryMc,
+ *   entryPrice, adaptiveTp, adaptiveSl, score, peakMultiple, maxHoldMs,
+ *   bundleAtEntry, eliteHit, flowTag, entryVol }
+ * @param {object} t - the vetted token (for fallbacks)
+ * @param {object} cfg - config/tuning
  */
-export async function realEnter(paperPos, t, finalScore, cfg) {
-  if (!isRealMode()) { floorEmit('real.skip', { mint: paperPos.mint, symbol: t.symbol, reason: 'realMode off' }); return null; }
+export async function realEnter(entry, t, cfg) {
+  const sym = entry.symbol || t.symbol;
+  const mint = entry.mint;
+  if (!isRealMode()) { floorEmit('real.skip', { mint, symbol: sym, reason: 'realMode off' }); return null; }
   try { await ensureRealBook(); } catch (e) {
     console.error('[realbook] ensure failed:', e.message);
-    floorEmit('real.skip', { mint: paperPos.mint, symbol: t.symbol, reason: 'ensure failed: ' + e.message });
+    floorEmit('real.skip', { mint, symbol: sym, reason: 'ensure failed: ' + e.message });
     return null;
   }
   if ((R.positions || []).length >= REAL_MAX_POSITIONS) {
     console.log('[realbook] skip: max real positions open');
-    floorEmit('real.skip', { mint: paperPos.mint, symbol: t.symbol, reason: 'max positions' });
+    floorEmit('real.skip', { mint, symbol: sym, reason: 'max positions' });
     return null;
   }
-  if ((R.positions || []).some(x => x.mint === paperPos.mint)) { floorEmit('real.skip', { mint: paperPos.mint, symbol: t.symbol, reason: 'already holding' }); return null; }
-  if (R.killSwitched) { floorEmit('real.skip', { mint: paperPos.mint, symbol: t.symbol, reason: 'kill switched' }); return null; }
+  if ((R.positions || []).some(x => x.mint === mint)) { floorEmit('real.skip', { mint, symbol: sym, reason: 'already holding' }); return null; }
+  if (R.killSwitched) { floorEmit('real.skip', { mint, symbol: sym, reason: 'kill switched' }); return null; }
+  // v3.25: cooldown — same semantics the paper book enforced.
+  const cd = (R.cooldowns || {})[mint];
+  if (cd && Date.now() - cd < (cfg.cooldownMin || 30) * 60000) {
+    floorEmit('real.skip', { mint, symbol: sym, reason: 'cooldown' });
+    return null;
+  }
 
-  // Sizing: same free-thinker logic, capped at 30% of real wallet.
+  // Sizing comes from the pipeline (realtrade.processSignal) — identical
+  // sizing logic to what paper used (score bands + vol boost + free thinker).
+  // Here we apply only the real-money guardrails.
   let spx = 150;
   try { spx = await solPrice(); } catch {}
   const walletUsd = R.cash + (R.positions || []).reduce((a, x) => a + (x.sizeUsd || 0), 0);
-  let solSize;
-  try {
-    const think = thinkEntry({ ...t, score: finalScore }, cfg, walletUsd);
-    solSize = think.solSize;
-  } catch { solSize = 0.05; }
+  let solSize = entry.solSize;
   // Hard cap: configurable via tuning (realMaxSizePct), default 30% of wallet per trade
   const maxPct = Math.min(0.95, Math.max(0.05, cfg.realMaxSizePct || REAL_MAX_SIZE_PCT));
   const maxSol = (walletUsd * maxPct) / spx;
@@ -398,58 +411,66 @@ export async function realEnter(paperPos, t, finalScore, cfg) {
   // Don't trade dust: min 0.01 SOL
   if (!(solSize >= 0.01)) {
     console.log('[realbook] skip: size below 0.01 SOL dust floor');
-    floorEmit('real.skip', { mint: paperPos.mint, symbol: t.symbol, reason: `dust floor (size ${solSize.toFixed(4)})` });
+    floorEmit('real.skip', { mint, symbol: sym, reason: `dust floor (size ${solSize.toFixed(4)})` });
     return null;
   }
   // Can't spend what we don't have (leave 0.02 SOL for fees)
   let walletSol = 0;
   try { walletSol = (await realWalletState()).sol; } catch (e) {
     console.error('[realbook] wallet read failed:', e.message);
-    floorEmit('real.skip', { mint: paperPos.mint, symbol: t.symbol, reason: 'wallet read failed: ' + e.message });
+    floorEmit('real.skip', { mint, symbol: sym, reason: 'wallet read failed: ' + e.message });
     return null;
   }
   solSize = Math.min(solSize, Math.max(0, walletSol - 0.02));
   if (!(solSize >= 0.01)) {
     console.log('[realbook] skip: insufficient SOL balance');
-    floorEmit('real.skip', { mint: paperPos.mint, symbol: t.symbol, reason: `insufficient SOL (${walletSol.toFixed(4)})` });
+    floorEmit('real.skip', { mint, symbol: sym, reason: `insufficient SOL (${walletSol.toFixed(4)})` });
     return null;
   }
 
-  const quotedPriceSol = t.price ? t.price / 1e9 / spx * 1e9 : null; // best-effort
-  void quotedPriceSol;
-  console.log(`[realbook] BUY ${t.symbol} ${solSize.toFixed(4)} SOL (score ${finalScore})`);
-  floorEmit('real.buy_attempt', { mint: paperPos.mint, symbol: t.symbol, solSize: +solSize.toFixed(4), score: finalScore });
+  console.log(`[realbook] BUY ${sym} ${solSize.toFixed(4)} SOL (score ${entry.score})`);
+  floorEmit('real.buy_attempt', { mint, symbol: sym, solSize: +solSize.toFixed(4), score: entry.score });
   let fill;
   try {
-    fill = await buyToken(paperPos.mint, solSize, {
+    fill = await buyToken(mint, solSize, {
       slippageBps: Math.round((cfg.slippage || 0.20) * 10000),
-      priorityFeeLamports: cfg.priorityFeeLamports || 500000,
+      priorityFeeLamports: cfg.priorityFeeLamports || PRIORITY_FEE_LAMPORTS,
+      jitoTipLamports: cfg.jitoTipLamports ?? JITO_TIP_LAMPORTS,
     });
   } catch (e) {
     console.error('[realbook] buy FAILED (fail-closed):', e.message);
-    floorEmit('real.buy_fail', { mint: paperPos.mint, symbol: t.symbol, error: e.message });
+    floorEmit('real.buy_fail', { mint, symbol: sym, error: e.message });
     return null;
   }
 
   const sizeUsd = solSize * spx;
   const pos = {
-    mint: paperPos.mint, symbol: t.symbol, name: t.name,
+    mint, symbol: sym, name: entry.name || t.name || null,
     entryTs: Date.now(),
+    lastPriceTs: Date.now(),
     solSize, sizeUsd,
     entryTxSig: fill.sig,
     quotedOut: fill.quotedOut,
+    tokensOut: fill.quotedOut / 1e6,   // v3.25: for exit math (mirrors paper's `tokens`)
+    peakMultiple: 1,                    // v3.25: for trailing-stop logic in tickReal
     // v3.24: store entry MC/price for live P&L display
-    entryMc: t.mc || paperPos.entryMc || null,
-    entryPrice: t.price || null,
-    // Mirror paper's adaptive TP/SL for exit decisions
-    adaptiveTp: paperPos.adaptiveTp ?? null,
-    adaptiveSl: paperPos.adaptiveSl ?? null,
-    score: finalScore,
+    entryMc: entry.entryMc || t.mc || null,
+    entryPrice: entry.entryPrice || t.price || null,
+    // Pipeline's adaptive TP/SL for exit decisions
+    adaptiveTp: entry.adaptiveTp ?? null,
+    adaptiveSl: entry.adaptiveSl ?? null,
+    maxHoldMs: entry.maxHoldMs || null,  // v3.25: conviction holds from the pipeline
+    bundleAtEntry: entry.bundleAtEntry ?? null,
+    score: entry.score,
+    eliteHit: !!entry.eliteHit,
+    flowTag: !!entry.flowTag,
+    entryVol: entry.entryVol ?? null,
+    route: fill.route || 'jupiter',
     real: true,
   };
   R.positions.push(pos);
   R.cash = Math.max(0, R.cash - sizeUsd);
-  // Slippage learning: signal price (USD→SOL) vs Jupiter fill price.
+  // Slippage learning: signal price (USD→SOL) vs fill price.
   let slipBps = null;
   try {
     if (t.price > 0 && fill.fillPriceSol > 0) {
@@ -463,9 +484,29 @@ export async function realEnter(paperPos, t, finalScore, cfg) {
     fillPriceSol: fill.fillPriceSol,
     slippageBps: slipBps, solAmount: solSize, txSig: fill.sig,
   });
+  // v3.25: trade journal entry (learning) — same as paper did.
+  try {
+    const { logTradeEntry } = await import('./learning.js');
+    logTradeEntry({
+      mint: pos.mint, symbol: pos.symbol, entryMc: pos.entryMc,
+      score: entry.score, breakdown: entry.breakdown || null, feeds: entry.feeds || null,
+      researchMod: entry.researchMod || 0, researchLine: entry.researchLine || null,
+      eliteHit: !!entry.eliteHit, buyPressure: entry.buyPressure || null,
+      creator: t.creator || null, m5Change: t.priceChange?.m5 ?? null,
+    });
+    if (t.creator) {
+      const { noteCreatorLaunchCount } = await import('./learning.js');
+      noteCreatorLaunchCount(t.creator, 1);
+    }
+  } catch { /* journal is a nicety */ }
   persist();
-  floorEmit('real.enter', { mint: pos.mint, symbol: pos.symbol, solSize, sig: fill.sig });
-  console.log(`[realbook] BOUGHT ${t.symbol} — tx ${fill.sig}`);
+  floorEmit('real.enter', { mint: pos.mint, symbol: pos.symbol, solSize, sig: fill.sig, route: fill.route });
+  floorEmit('trade.enter', {
+    mint, symbol: sym, name: pos.name,
+    score: entry.score, sizeUsd, entryMc: pos.entryMc,
+    researchMod: entry.researchMod || 0,
+  });
+  console.log(`[realbook] BOUGHT ${sym} — tx ${fill.sig} (route: ${fill.route || 'jupiter'})`);
   return pos;
 }
 
@@ -486,7 +527,7 @@ export async function realManualSell(mint, cfg = {}) {
   return realClosePosition(mint, '👆 manual sell', cfg);
 }
 
-async function realClosePosition(mint, exitReason, cfg) {
+export async function realClosePosition(mint, exitReason, cfg) {
   if (!R) return null;
   const idx = (R.positions || []).findIndex(x => x.mint === mint);
   if (idx < 0) return null;
@@ -512,7 +553,7 @@ async function realClosePosition(mint, exitReason, cfg) {
   try {
     fill = await sellToken(pos.mint, String(tokenBal.raw), tokenBal.decimals, {
       slippageBps: Math.round((cfg.slippage || 0.20) * 10000),
-      priorityFeeLamports: cfg.priorityFeeLamports || 500000,
+      priorityFeeLamports: cfg.priorityFeeLamports || PRIORITY_FEE_LAMPORTS,
     });
   } catch (e) {
     console.error('[realbook] sell FAILED:', e.message);
@@ -525,6 +566,8 @@ async function realClosePosition(mint, exitReason, cfg) {
   const proceedsUsd = fill.solOut * spx;
   const pnlUsd = proceedsUsd - pos.sizeUsd;
   R.cash += proceedsUsd;
+  // v3.25: cooldown — same semantics the paper book enforced.
+  R.cooldowns = { ...(R.cooldowns || {}), [pos.mint]: Date.now() };
   const trade = {
     mint: pos.mint, symbol: pos.symbol, name: pos.name,
     solSize: pos.solSize, sizeUsd: pos.sizeUsd,
@@ -544,8 +587,17 @@ async function realClosePosition(mint, exitReason, cfg) {
     quotedPriceSol: null, fillPriceSol: null,
     slippageBps: null, solAmount: fill.solOut, txSig: fill.sig,
   });
+  // v3.25: learning from real exits (same as paper did).
+  try {
+    const { logTradeExit } = await import('./learning.js');
+    logTradeExit(trade);
+  } catch { /* journal is a nicety */ }
   persist();
   floorEmit('real.exit', { mint: pos.mint, symbol: pos.symbol, pnlUsd, sig: fill.sig });
+  floorEmit('risk.exit', {
+    mint: pos.mint, symbol: pos.symbol, name: pos.name,
+    exitReason, pnlUsd, multiple: trade.multiple, learned: false,
+  });
   console.log(`[realbook] SOLD ${pos.symbol} pnl $${pnlUsd.toFixed(2)} — tx ${fill.sig}`);
 
   // Kill-switch check after every close
@@ -635,6 +687,32 @@ export async function realBookSnapshot() {
       }
     }
   } catch {}
+  // v3.25: live SOL balance for the header, mark-to-market equity for display
+  // (the kill-switch equity stays cost-basis conservative — see realEquityUsd).
+  let walletSol = liveSol;
+  try {
+    if (realExecReady()) {
+      const st = await realWalletState();
+      walletSol = st.sol;
+    }
+  } catch {}
+  let mtmEquity = eq;
+  try {
+    if (R && walletSol != null) {
+      let spx = 150;
+      try { spx = await solPrice(); } catch {}
+      let posMtm = 0;
+      for (const p of (R.positions || [])) {
+        const lp = livePrices[p.mint] || {};
+        const curMc = lp.mc, entryMc = p.entryMc;
+        const mult = (curMc && entryMc) ? curMc / entryMc : 1;
+        posMtm += (p.sizeUsd || 0) * mult;
+      }
+      mtmEquity = walletSol * spx + posMtm;
+    }
+  } catch {}
+  const closed = R ? (R.closed || []) : [];
+  const wins = closed.filter(c => (c.pnlUsd || 0) > 0);
   return {
     ts: Date.now(),
     enabled: realModeOn && !killSwitched,
@@ -645,9 +723,11 @@ export async function realBookSnapshot() {
     startSol: R ? R.startSol : liveSol,
     cash: R ? R.cash : null,
     liveSol,
+    walletSol,
     equity: eq,
-    pnlUsd: R && eq != null ? eq - R.startUsd : null,
-    pnlPct: R && eq != null && R.startUsd > 0 ? (eq - R.startUsd) / R.startUsd : null,
+    mtmEquity,
+    pnlUsd: R && mtmEquity != null ? mtmEquity - R.startUsd : null,
+    pnlPct: R && mtmEquity != null && R.startUsd > 0 ? (mtmEquity - R.startUsd) / R.startUsd : null,
     positions: R ? R.positions.map(p => {
       const lp = livePrices[p.mint] || {};
       const curMc = lp.mc || null;
@@ -657,16 +737,28 @@ export async function realBookSnapshot() {
         mint: p.mint, symbol: p.symbol, name: p.name,
         solSize: p.solSize, sizeUsd: p.sizeUsd,
         entryTs: p.entryTs, entryTxSig: p.entryTxSig,
+        heldMs: Date.now() - (p.entryTs || Date.now()),
         entryMc, entryPrice: p.entryPrice || null,
         curMc, curPrice: lp.price || null,
         multiple,
         valueNow: multiple != null ? p.sizeUsd * multiple : null,
         unrealized: multiple != null ? p.sizeUsd * (multiple - 1) : null,
         score: p.score, adaptiveTp: p.adaptiveTp, adaptiveSl: p.adaptiveSl,
+        route: p.route || null,
       };
     }) : [],
-    closed: R ? (R.closed || []).slice(0, 50) : [],
+    closed: closed.slice(0, 50),
+    fills: R ? (R.fills || []).slice(-50).reverse() : [],
     equityCurve: R ? (R.equity || []).slice(-200) : [],
+    stats: {
+      totalTrades: closed.length,
+      wins: wins.length,
+      losses: closed.length - wins.length,
+      winRate: closed.length ? wins.length / closed.length : null,
+      realizedPnl: closed.reduce((s, c) => s + (c.pnlUsd || 0), 0),
+      avgMultiple: closed.length ? closed.reduce((s, c) => s + (c.multiple || 1), 0) / closed.length : null,
+      openCount: R ? (R.positions || []).length : 0,
+    },
     avgSlippageBps: avgSlip,
     guardrails: {
       maxPositions: REAL_MAX_POSITIONS,

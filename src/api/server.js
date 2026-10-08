@@ -52,7 +52,7 @@ app.get('/health', async (req, res) => {
     openai: Boolean((process.env.OPENAI_API_KEY || '').trim()),
     cycles: cycleStats.cycles,
     lastCycleTs: cycleStats.lastCycleTs,
-    paper: true,
+    mode: 'real-only', // v3.25: paper trading removed
   });
 });
 
@@ -86,16 +86,10 @@ app.post('/api/rugshield', async (req, res) => {
   }
 });
 
-// v3.19: fund the paper bankroll (POST {sol: 1}). Fresh cash + equity curve;
-// past closed trades carry over and learning ledgers are never touched.
+// v3.25: paper bankroll removed — the bot is real-only. Kept as an endpoint
+// so old callers get a clear error instead of a 404.
 app.post('/api/bankroll', async (req, res) => {
-  try {
-    const sol = Number(req.body && req.body.sol) || 1;
-    const out = await fundBankroll(sol);
-    res.json({ ok: true, ts: Date.now(), ...out });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: String(e && e.message || e) });
-  }
+  res.status(410).json({ ok: false, error: 'paper trading removed in v3.25 — bot is real-only' });
 });
 
 // v3.19: live tuning from the control panel (POST {patch: {maxMc: 500000}}).
@@ -142,33 +136,47 @@ app.get('/api/realbook/dryrun', async (req, res) => {
   }
 });
 
-// v3.24: force-close paper positions (admin — for zombie/rugged positions
-// the sweeper misses). POST { mints: [...] } or { all: true }.
+// v3.25: force-close REAL positions (admin — for zombie/rugged positions
+// the sweeper can't sell on-chain, e.g. zero liquidity). This removes them
+// from the book WITHOUT an on-chain sell — use /api/admin/sell-position
+// first when a sell is possible. POST { mints: [...] } or { all: true }.
 app.post('/api/admin/close-positions', async (req, res) => {
   try {
-    const { getDesk } = await import('../lib/paper.js');
-    const p = getDesk();
-    if (!p) return res.status(500).json({ ok: false, error: 'no desk' });
+    const { ensureRealBook, getRealBook } = await import('../lib/realbook.js');
+    await ensureRealBook();
+    const R = getRealBook();
+    if (!R) return res.status(500).json({ ok: false, error: 'no book' });
     const { mints, all } = req.body || {};
     const now = Date.now();
     const closed = [];
     const keep = [];
-    for (const pos of (p.positions || [])) {
+    for (const pos of (R.positions || [])) {
       if (all || (mints && mints.includes(pos.mint))) {
-        pos.exitMc = 0; pos.exitTs = now; pos.multiple = 0;
-        pos.exitReason = '🧹 admin force-close (zombie)';
-        pos.pnlUsd = -pos.sizeUsd;
+        const trade = {
+          mint: pos.mint, symbol: pos.symbol, name: pos.name,
+          solSize: pos.solSize, sizeUsd: pos.sizeUsd,
+          proceedsUsd: 0, pnlUsd: -(pos.sizeUsd || 0),
+          multiple: 0,
+          entryTxSig: pos.entryTxSig, exitTxSig: null,
+          entryTs: pos.entryTs, exitTs: now,
+          holdMs: now - pos.entryTs,
+          exitReason: '🧹 admin force-close (zombie, no on-chain sell)',
+          score: pos.score, real: true,
+        };
+        R.closed = [trade, ...(R.closed || [])].slice(0, 500);
+        R.cooldowns = { ...(R.cooldowns || {}), [pos.mint]: now };
         closed.push({ symbol: pos.symbol, mint: pos.mint });
       } else {
         keep.push(pos);
       }
     }
-    p.positions = keep;
-    // persist
-    try {
-      const { saveDesk } = await import('../lib/paper.js');
-      if (saveDesk) await saveDesk(p);
-    } catch {}
+    R.positions = keep;
+    const { pool } = await import('../db/pool.js');
+    await pool.query(
+      `INSERT INTO ab_desk_state (id, state, updated_at) VALUES (2, $1::jsonb, NOW())
+       ON CONFLICT (id) DO UPDATE SET state = EXCLUDED.state, updated_at = NOW()`,
+      [JSON.stringify(R)]
+    ).catch(() => {});
     res.json({ ok: true, closed: closed.length, symbols: closed.map(c => c.symbol) });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e && e.message || e) });

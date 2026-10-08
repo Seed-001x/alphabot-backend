@@ -56,6 +56,10 @@ export const DEFAULT_CONFIG = {
   maxHoldHours: 1.5,
   cooldownMin: 30,
   slippage: 0.05,
+  // --- REAL-ONLY execution (v3.25) ---
+  realMaxSizePct: 0.70,        // max 70% of wallet per trade (tunable)
+  priorityFeeLamports: 1000000, // v3.25: 0.001 SOL priority fee per tx (user-approved bump from 0.0009)
+  jitoTipLamports: 1000000,     // v3.25: 0.001 SOL Jito tip on direct buys (dual-route)
   // --- LOOP ---
   scanIntervalSec: 30,   // v3.14: quicker scans (user 2026-10-06) — was 45s
   priceIntervalSec: 15,   // v3.14: quicker ticks — was 20s

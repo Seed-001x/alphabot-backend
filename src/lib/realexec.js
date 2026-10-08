@@ -1,20 +1,35 @@
-// REAL EXECUTION (v3.24) — real-money SOL↔token swaps via Jupiter.
-// One integration point: Jupiter's swap API routes across pump.fun,
-// Raydium, Meteora, etc. Helius RPC sends with priority fees.
+// REAL EXECUTION (v3.25) — real-money SOL↔token swaps.
+// Entries: direct pump.fun bonding-curve buys via the official @pump-fun/pump-sdk
+// (no Jupiter quote round-trip, ~200ms faster). Falls back to Jupiter v1.
+// Exits: Jupiter v1 (better routing on the way out).
+// Broadcast: dual-route fan-out — Helius Sender + Jito block engine + RPC chain,
+// first success wins. Priority fee 0.001 SOL + 0.001 SOL Jito tip on direct buys.
 //
 // SECURITY:
 // - Wallet key comes ONLY from REAL_WALLET_KEY env (base58 private key).
 // - The key is NEVER logged, NEVER returned, NEVER committed.
-// - If Jupiter is unreachable → fail closed (no trade), never fall back
-//   to a different route silently.
+// - Fail closed: any error → throws, no partial state.
 
-import { Keypair, VersionedTransaction } from '@solana/web3.js';
+import {
+  Keypair, VersionedTransaction, TransactionMessage,
+  ComputeBudgetProgram, SystemProgram, PublicKey,
+} from '@solana/web3.js';
 import bs58 from 'bs58';
 import { getKey as heliusKey, SOL_MINT } from './helius.js';
 import { floorEmit } from './events.js';
+import { buildPumpBuy, isPumpCurveMint } from './pumpdirect.js';
 
 const JUP_QUOTE = 'https://api.jup.ag/swap/v1/quote';
 const JUP_SWAP = 'https://api.jup.ag/swap/v1/swap';
+const HELIUS_SENDER = 'https://sender.helius-rpc.com/fast';
+const JITO_ENGINE = 'https://mainnet.block-engine.jito.wtf/api/v1/transactions';
+
+// v3.25: 0.001 SOL priority fee per transaction (user-approved bump from 0.0009).
+export const PRIORITY_FEE_LAMPORTS = 1000000;
+// Jito tip for the dual-route path (standard tier per research).
+export const JITO_TIP_LAMPORTS = 1000000;
+// Jito tip account (from Jito's official examples; overridable via JITO_TIP_ACCOUNT env).
+const JITO_TIP_ACCOUNT = process.env.JITO_TIP_ACCOUNT || '96gYZGLnJYVFmbjzopPSU6QiEV5fGqXkGuYc9p7fSKdZ';
 
 // v3.24: fetch with retry — Jupiter can flake, don't fail a real trade on one bad request
 async function fetchRetry(url, opts = {}, retries = 3) {
@@ -68,10 +83,42 @@ export function realExecReady() {
   return !!(process.env.REAL_WALLET_KEY || '').trim() && !!heliusKey();
 }
 
+const FALLBACK_RPCS = [
+  'https://solana-rpc.publicnode.com',
+  'https://api.mainnet-beta.solana.com',
+];
+
 function rpcUrl() {
   const k = heliusKey();
   if (!k) throw new Error('realexec: HELIUS_API_KEY not set');
   return `https://mainnet.helius-rpc.com/?api-key=${k}`;
+}
+
+/** JSON-RPC POST with RPC fallback chain. Exported for pumpdirect injection. */
+export async function rpcPost(method, params, timeoutMs = 15000) {
+  const urls = [];
+  try { urls.push(rpcUrl()); } catch {}
+  urls.push(...FALLBACK_RPCS);
+  let lastErr = null;
+  for (const url of urls) {
+    try {
+      const r = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: AbortSignal.timeout(timeoutMs),
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+      });
+      const text = await r.text();
+      let j;
+      try { j = JSON.parse(text); }
+      catch { throw new Error('rpc: non-JSON response (' + text.slice(0, 60) + ')'); }
+      if (j.error) throw new Error('rpc: ' + (j.error.message || 'unknown'));
+      return j.result;
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr || new Error('rpc: all endpoints failed');
 }
 
 async function jupQuote(inputMint, outputMint, amount, slippageBps) {
@@ -101,43 +148,86 @@ async function jupSwapTx(quoteResponse, userPublicKey, prioritizationFeeLamports
   return j.swapTransaction; // base64 VersionedTransaction
 }
 
-async function sendSigned(base64Tx) {
-  const kp = loadKeypair();
-  const buf = Buffer.from(base64Tx, 'base64');
-  const tx = VersionedTransaction.deserialize(buf);
-  tx.sign([kp]);
-  const signed = Buffer.from(tx.serialize()).toString('base64');
-  const urls = [rpcUrl(), ...FALLBACK_RPCS];
-  let lastErr = null;
-  for (const url of urls) {
-    try {
-      const r = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        signal: AbortSignal.timeout(30000),
-        body: JSON.stringify({
-          jsonrpc: '2.0', id: 1, method: 'sendTransaction',
-          params: [signed, { encoding: 'base64', maxRetries: 2, preflightCommitment: 'confirmed' }],
-        }),
-      });
-      if (!r.ok) throw new Error(`rpc send failed: ${r.status}`);
-      const text = await r.text();
-      let j;
-      try { j = JSON.parse(text); }
-      catch { throw new Error('rpc: non-JSON response (' + text.slice(0, 60) + ')'); }
-      if (j.error) throw new Error(`rpc error: ${j.error.message || JSON.stringify(j.error)}`);
-      return j.result; // signature
-    } catch (e) {
-      lastErr = e;
-      console.error(`[realexec] send via ${url.slice(8, 32)}... failed: ${e.message} — trying fallback`);
-    }
+// ------------------------------------------------------------ dual-route send
+// v3.25: fan-out broadcast. The SAME signed transaction goes to:
+//   1. Helius Sender (dual-routes staked validators + Jito internally)
+//   2. Jito block engine directly
+//   3. Standard RPC chain (Helius → publicnode → mainnet-beta)
+// First success wins — same tx = same signature everywhere, so duplicates are
+// harmless (the network dedupes by signature).
+async function sendVia(name, url, signedB64, extraParams = {}) {
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    signal: AbortSignal.timeout(30000),
+    body: JSON.stringify({
+      jsonrpc: '2.0', id: 1, method: 'sendTransaction',
+      params: [signedB64, { encoding: 'base64', maxRetries: 2, preflightCommitment: 'confirmed', ...extraParams }],
+    }),
+  });
+  if (!r.ok) throw new Error(`${name}: HTTP ${r.status}`);
+  const text = await r.text();
+  let j;
+  try { j = JSON.parse(text); }
+  catch { throw new Error(`${name}: non-JSON response`); }
+  if (j.error) throw new Error(`${name}: ${j.error.message || JSON.stringify(j.error)}`);
+  if (!j.result) throw new Error(`${name}: no signature`);
+  return j.result;
+}
+
+async function sendDualRoute(signedB64) {
+  const attempts = [];
+  // 1. Helius Sender — dual-routes staked validators + Jito. Requires the
+  //    Sender add-on on the key; if the key lacks it this fails and we move on.
+  if (heliusKey()) {
+    attempts.push({
+      name: 'helius-sender',
+      fn: () => sendVia('helius-sender', `${HELIUS_SENDER}?api-key=${heliusKey()}`, signedB64),
+    });
   }
-  throw lastErr || new Error('rpc send: all endpoints failed');
+  // 2. Jito block engine directly.
+  attempts.push({
+    name: 'jito',
+    fn: () => sendVia('jito', JITO_ENGINE, signedB64),
+  });
+  // 3. Standard RPC chain (sequential fallbacks inside).
+  attempts.push({
+    name: 'rpc-chain',
+    fn: async () => {
+      const urls = [];
+      try { urls.push(rpcUrl()); } catch {}
+      urls.push(...FALLBACK_RPCS);
+      let lastErr = null;
+      for (const url of urls) {
+        try {
+          return await sendVia('rpc', url, signedB64);
+        } catch (e) { lastErr = e; }
+      }
+      throw lastErr || new Error('rpc-chain: all failed');
+    },
+  });
+
+  const results = await Promise.allSettled(attempts.map(a =>
+    a.fn().then(sig => ({ name: a.name, sig }))
+  ));
+  const wins = results
+    .filter(r => r.status === 'fulfilled')
+    .map(r => r.value);
+  const fails = results
+    .filter(r => r.status === 'rejected')
+    .map(r => String(r.reason && r.reason.message || r.reason));
+  if (wins.length) {
+    console.log(`[realexec] sent via ${wins.map(w => w.name).join('+')} → ${wins[0].sig}`);
+    return wins[0].sig;
+  }
+  throw new Error('send: all routes failed — ' + fails.join(' | ').slice(0, 300));
 }
 
 async function confirmTx(sig, timeoutMs = 45000) {
   const t0 = Date.now();
-  const urls = [rpcUrl(), ...FALLBACK_RPCS];
+  const urls = [];
+  try { urls.push(rpcUrl()); } catch {}
+  urls.push(...FALLBACK_RPCS);
   while (Date.now() - t0 < timeoutMs) {
     for (const url of urls) {
       try {
@@ -167,35 +257,142 @@ async function confirmTx(sig, timeoutMs = 45000) {
   throw new Error('tx confirmation timeout: ' + sig);
 }
 
+/** Priority-fee instructions: ~0.001 SOL total at 300k compute units. */
+function priorityFeeIxs() {
+  return [
+    ComputeBudgetProgram.setComputeUnitLimit({ units: 300000 }),
+    // 1_000_000 lamports ≈ microLamports * units / 1e6 → 3_333_333 * 300_000 / 1e6 ≈ 1_000_000
+    ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 3333333 }),
+  ];
+}
+
+/** Jito tip instruction — 0.001 SOL to a Jito tip account. */
+function jitoTipIx(fromPubkey, lamports = JITO_TIP_LAMPORTS) {
+  return SystemProgram.transfer({
+    fromPubkey,
+    toPubkey: new PublicKey(JITO_TIP_ACCOUNT),
+    lamports,
+  });
+}
+
+async function simulateOrThrow(signedB64) {
+  const res = await rpcPost('simulateTransaction', [
+    signedB64,
+    { encoding: 'base64', sigVerify: false, replaceRecentBlockhash: false, commitment: 'confirmed' },
+  ], 20000);
+  if (res && res.err) {
+    const logs = (res.logs || []).slice(-6).join(' | ');
+    throw new Error('simulation failed: ' + JSON.stringify(res.err).slice(0, 200) + ' :: ' + logs.slice(0, 300));
+  }
+  return true;
+}
+
+/**
+ * Direct pump.fun buy — builds the tx locally via the official SDK, signs,
+ * simulates, and dual-route broadcasts. Throws on any problem (caller falls
+ * back to Jupiter).
+ */
+async function buyPumpDirect(mint, solAmount, opts = {}) {
+  const kp = loadKeypair();
+  const userPk = kp.publicKey;
+  const lamports = Math.floor(solAmount * 1e9);
+  const slippagePct = Math.round(((opts.slippageBps ?? DEFAULT_SLIPPAGE_BPS) / 10000) * 100);
+
+  const { instructions: buyIxs, expectedTokensOut } = await buildPumpBuy(
+    { mint, user: userPk.toBase58(), lamports, slippagePct },
+    rpcPost,
+  );
+
+  const tipLamports = opts.jitoTipLamports ?? JITO_TIP_LAMPORTS;
+  const ixs = [
+    ...priorityFeeIxs(),
+    ...(tipLamports > 0 ? [jitoTipIx(userPk, tipLamports)] : []),
+    ...buyIxs,
+  ];
+
+  const { value } = await rpcPost('getLatestBlockhash', [{ commitment: 'confirmed' }], 15000);
+  const blockhash = value.blockhash;
+  const msg = new TransactionMessage({
+    payerKey: userPk, recentBlockhash: blockhash, instructions: ixs,
+  }).compileToV0Message();
+  const tx = new VersionedTransaction(msg);
+  tx.sign([kp]);
+  const signedB64 = Buffer.from(tx.serialize()).toString('base64');
+
+  // Simulate first — a bad instruction layout must never hit the network
+  // as a real attempt (it would still fail closed, but sim is cheaper).
+  await simulateOrThrow(signedB64);
+
+  const sig = await sendDualRoute(signedB64);
+  await confirmTx(sig);
+  floorEmit('real.buy', { mint, solAmount, sig, quotedOut: expectedTokensOut, route: 'pump-direct' });
+
+  // Actual tokens received — read the user's ATA post-confirm (retries).
+  let tokensOut = expectedTokensOut / 1e6;
+  try {
+    const { getAssociatedTokenAddressSync: getAta } = await import('@solana/spl-token');
+    const { TOKEN_PROGRAM_ID: TPID } = await import('@solana/spl-token');
+    const ata = getAta(new PublicKey(mint), userPk, true, TPID);
+    for (let i = 0; i < 4; i++) {
+      try {
+        const bal = await rpcPost('getTokenAccountBalance', [ata.toBase58()], 10000);
+        const raw = Number(bal?.value?.amount || 0);
+        const dec = Number(bal?.value?.decimals || 6);
+        if (raw > 0) { tokensOut = raw / Math.pow(10, dec); break; }
+      } catch {}
+      await new Promise(r => setTimeout(r, 1500));
+    }
+  } catch {}
+
+  return { sig, quotedOut: Math.round(tokensOut * 1e6), fillPriceSol: solAmount / Math.max(1e-9, tokensOut), route: 'pump-direct' };
+}
+
 /**
  * Buy a token with SOL. Fail-closed: any error → throws, no partial state.
+ * Route: direct pump.fun buy for bonding-curve mints, Jupiter v1 otherwise
+ * (or when the direct path fails).
  * @param {string} mint - token mint
  * @param {number} solAmount - SOL to spend (not lamports)
- * @param {object} opts - { slippageBps, priorityFeeLamports }
- * @returns {object} { sig, tokensOut, fillPriceSol, quotedOut }
+ * @param {object} opts - { slippageBps, priorityFeeLamports, jitoTipLamports }
+ * @returns {object} { sig, tokensOut, fillPriceSol, quotedOut, route }
  */
 export async function buyToken(mint, solAmount, opts = {}) {
   const slippageBps = opts.slippageBps ?? DEFAULT_SLIPPAGE_BPS;
-  const priorityFee = opts.priorityFeeLamports ?? 500000; // 0.0005 SOL — fast inclusion preset
+  const priorityFee = opts.priorityFeeLamports ?? PRIORITY_FEE_LAMPORTS; // 0.001 SOL
   const lamports = Math.floor(solAmount * 1e9);
   if (!(lamports > 0)) throw new Error('realexec: bad solAmount');
+
+  // v3.25: direct pump.fun buy first — no Jupiter round-trip.
+  if (isPumpCurveMint(mint)) {
+    try {
+      const r = await buyPumpDirect(mint, solAmount, { slippageBps, jitoTipLamports: opts.jitoTipLamports });
+      console.log(`[realexec] pump-direct BUY ${mint.slice(0, 8)}… ${solAmount} SOL → ${r.sig}`);
+      return r;
+    } catch (e) {
+      console.error(`[realexec] pump-direct failed (${e.message}) — falling back to Jupiter`);
+      floorEmit('real.route_fallback', { mint, from: 'pump-direct', to: 'jupiter', error: e.message });
+    }
+  }
 
   const quote = await jupQuote(SOL_MINT, mint, lamports, slippageBps);
   const quotedOut = Number(quote.outAmount);
   const swapB64 = await jupSwapTx(quote, realWalletAddress(), priorityFee);
-  const sig = await sendSigned(swapB64);
+  // Sign Jupiter's tx and dual-route broadcast.
+  const kp = loadKeypair();
+  const tx = VersionedTransaction.deserialize(Buffer.from(swapB64, 'base64'));
+  tx.sign([kp]);
+  const signed = Buffer.from(tx.serialize()).toString('base64');
+  const sig = await sendDualRoute(signed);
   await confirmTx(sig);
 
-  // Fill price from the quote's output (actual on-chain may vary slightly;
-  // the confirmed tx is the source of truth — signature recorded).
-  floorEmit('real.buy', { mint, solAmount, sig, quotedOut });
+  floorEmit('real.buy', { mint, solAmount, sig, quotedOut, route: 'jupiter' });
   // v3.24: fillPriceSol in SOL per token — quotedOut is raw units (6 decimals for pump.fun)
   const tokensOut = quotedOut / 1e6;
-  return { sig, quotedOut, fillPriceSol: solAmount / Math.max(1e-9, tokensOut) };
+  return { sig, quotedOut, fillPriceSol: solAmount / Math.max(1e-9, tokensOut), route: 'jupiter' };
 }
 
 /**
- * Sell a token for SOL.
+ * Sell a token for SOL (Jupiter v1 — best routing on exits).
  * @param {string} mint - token mint
  * @param {string} tokenAccountAmount - raw token amount (base units) to sell
  * @param {number} decimals - token decimals
@@ -203,13 +400,17 @@ export async function buyToken(mint, solAmount, opts = {}) {
  */
 export async function sellToken(mint, rawAmount, decimals, opts = {}) {
   const slippageBps = opts.slippageBps ?? DEFAULT_SLIPPAGE_BPS;
-  const priorityFee = opts.priorityFeeLamports ?? 500000; // 0.0005 SOL — fast inclusion preset
+  const priorityFee = opts.priorityFeeLamports ?? PRIORITY_FEE_LAMPORTS; // 0.001 SOL
   if (!(Number(rawAmount) > 0)) throw new Error('realexec: bad token amount');
 
   const quote = await jupQuote(mint, SOL_MINT, String(rawAmount), slippageBps);
   const quotedOut = Number(quote.outAmount);
   const swapB64 = await jupSwapTx(quote, realWalletAddress(), priorityFee);
-  const sig = await sendSigned(swapB64);
+  const kp = loadKeypair();
+  const tx = VersionedTransaction.deserialize(Buffer.from(swapB64, 'base64'));
+  tx.sign([kp]);
+  const signed = Buffer.from(tx.serialize()).toString('base64');
+  const sig = await sendDualRoute(signed);
   await confirmTx(sig);
 
   floorEmit('real.sell', { mint, sig, quotedOut });
@@ -222,43 +423,14 @@ export async function sellToken(mint, rawAmount, decimals, opts = {}) {
  * v3.24: RPC fallback chain — Helius free tier can hit "max usage reached",
  * so fall through to public RPCs instead of failing the entire real path.
  */
-const FALLBACK_RPCS = [
-  'https://solana-rpc.publicnode.com',
-  'https://api.mainnet-beta.solana.com',
-];
-
 export async function realWalletState(mints = []) {
   const addr = realWalletAddress();
   if (!addr) throw new Error('realexec: no wallet configured');
-  const urls = [rpcUrl(), ...FALLBACK_RPCS];
-  const post = async (method, params) => {
-    let lastErr = null;
-    for (const url of urls) {
-      try {
-        const r = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          signal: AbortSignal.timeout(15000),
-          body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
-        });
-        const text = await r.text();
-        let j;
-        try { j = JSON.parse(text); }
-        catch { throw new Error('rpc: non-JSON response (' + text.slice(0, 60) + ')'); }
-        if (j.error) throw new Error('rpc: ' + (j.error.message || 'unknown'));
-        return j.result;
-      } catch (e) {
-        lastErr = e;
-        console.error(`[realexec] RPC ${url.slice(8, 32)}... failed: ${e.message} — trying fallback`);
-      }
-    }
-    throw lastErr || new Error('rpc: all endpoints failed');
-  };
-  const solLamports = (await post('getBalance', [addr])).value;
+  const solLamports = (await rpcPost('getBalance', [addr])).value;
   const tokens = {};
   for (const mint of mints) {
     try {
-      const res = await post('getTokenAccountsByOwner', [
+      const res = await rpcPost('getTokenAccountsByOwner', [
         addr, { mint }, { encoding: 'jsonParsed' },
       ]);
       const accs = res.value || [];

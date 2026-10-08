@@ -1,7 +1,8 @@
 // ALPHABOT backend — pipeline loop orchestrator.
 // Runs the desk server-side: 45s SCAN→VET→RESEARCH→SCORE→TRADE cycle,
 // 20s price tick (RISK exits), slow kill-confirmation pass, and the
-// smart-flow watcher (Helius). Paper money only. Fail-open everywhere.
+// smart-flow watcher (Helius). v3.25: REAL-ONLY — signals execute on-chain,
+// no paper ledger. Fail-open everywhere.
 
 import { loadConfig, applyAggressive } from '../lib/config.js';
 import { initStorage, storage, kvGetJson, kvSetJson } from '../lib/storage.js';
@@ -13,10 +14,8 @@ import { Q, queueStats } from '../lib/queues.js';
 import { fetchTokens, solPrice } from '../lib/dexscreener.js';
 import { ELITE } from '../lib/elite.js';
 import { getKey as heliusKey, fetchWalletTxns, parseSwaps } from '../lib/helius.js';
-import {
-  initPortfolio, getPortfolio, processResult, tick,
-  snapshotEquity, statsFor,
-} from '../lib/paper.js';
+// v3.25: real-only signal processing (ported from paper.js — same logic, real book).
+import { processSignal, tickReal } from '../lib/realtrade.js';
 import { initLearning, logKill, confirmKills, getBrainStats } from '../lib/learning.js';
 import { getExitRules } from '../lib/exits.js';
 import { startFlowWatch, getFlowStats } from '../lib/flowWatch.js';
@@ -24,7 +23,7 @@ import { startNewPoolsWatch, getNewPoolsStats } from '../lib/geckoterminal.js';
 import { fetchDbcPrices } from '../lib/meteora.js';
 import { probePumpPortal, pumpPortalState } from '../lib/pumpportal.js';
 import { recentEvents, floorEmit } from '../lib/events.js';
-import { initRealBook, loadRealModeFlag, isRealMode } from '../lib/realbook.js';
+import { initRealBook, loadRealModeFlag, getRealBook } from '../lib/realbook.js';
 
 const VET_PER_CYCLE = 25;
 const RUG_PER_CYCLE = 8;
@@ -138,7 +137,6 @@ function injectNewPool(launch) {
 
 async function scanCycle() {
   const t0 = Date.now();
-  const p = getPortfolio();
   try {
     pruneSeen();
     warmCalloutCache();
@@ -192,7 +190,7 @@ async function scanCycle() {
           if (r.verdict === 'KILLED') {
             cycleStats.killed++;
             logKill(t, r.killPass, r.killReason);
-            processResult(p, r, cfg, { silent: false });
+            await processSignal(r, cfg, {});
           } else {
             Q.research.push({ ...t, dossier: r.dossier, score: r.score, breakdown: r.breakdown, adapted: r.adapted });
           }
@@ -230,11 +228,12 @@ async function scanCycle() {
           adapted: adapted || item.adapted,
         };
         cycleStats.scored++;
-        const { entered } = processResult(p, r, cfg, { silent: false, solPrice: spx });
+        // v3.25 REAL-ONLY: the signal goes straight to real execution.
+        // processSignal runs the identical scoring/gates/sizing logic and
+        // calls realEnter on a pass. No paper leg.
+        const { entered } = await processSignal(r, cfg, { solPrice: spx });
         if (entered) {
           cycleStats.entries++;
-          // v3.24: real-money hook now lives INSIDE processResult (paper.js) —
-          // every entry fires real automatically. Nothing needed here.
         }
       } catch { cycleStats.errors++; }
     }
@@ -253,13 +252,11 @@ async function scanCycle() {
 }
 
 async function priceTick() {
-  const p = getPortfolio();
-  if (!p) return;
+  // v3.25 REAL-ONLY: prices feed the real book's exit evaluation.
+  const R = getRealBook();
+  if (!R) return;
   try {
-    const mints = [...new Set([
-      ...(p.positions || []).map(x => x.mint),
-      ...(p.signals || []).slice(0, 30).map(s => s.mint).filter(Boolean),
-    ])].filter(Boolean);
+    const mints = [...new Set((R.positions || []).map(x => x.mint))].filter(Boolean);
     if (mints.length) {
       const raw = await fetchTokens(mints);
       const { tokenView } = await import('../lib/dexscreener.js');
@@ -297,7 +294,7 @@ async function priceTick() {
       if (!priceTick._lastBundle || now - priceTick._lastBundle > 300000) {
         priceTick._lastBundle = now;
         const { fetchRugReport } = await import('../lib/pumpfun.js');
-        for (const pos of (p.positions || []).filter(x => x.bundleAtEntry > 5)) {
+        for (const pos of (R.positions || []).filter(x => x.bundleAtEntry > 5)) {
           const d = await fetchRugReport(pos.mint);
           if (d && d.bundlePct != null) {
             const drop = pos.bundleAtEntry - d.bundlePct;
@@ -314,7 +311,7 @@ async function priceTick() {
     // v3.20: on-chain price refresh for DBC positions (pre-DexScreener).
     // DexScreener lags new DBC pools by minutes; the curve doesn't.
     try {
-      const dbcPositions = (p.positions || []).filter(x => x._dbcPool && x.mint);
+      const dbcPositions = (R.positions || []).filter(x => x._dbcPool && x.mint);
       if (dbcPositions.length && heliusKey()) {
         const dbcPrices = await fetchDbcPrices(
           heliusKey(),
@@ -327,26 +324,14 @@ async function priceTick() {
       }
     } catch { /* DBC refresh is a nicety */ }
     const elite = await refreshElite();
-    const closed = tick(p, priceMap, elite.swaps, cfg);
+    // v3.25: exits evaluate + execute directly on the real book (on-chain sells).
+    const closed = await tickReal(priceMap, elite.swaps, cfg);
     if (closed.length) cycleStats.exits += closed.length;
-    // v3.24: mirror paper exits with real sells (fire-and-forget).
-    if (closed.length) {
-      try {
-        if (isRealMode()) {
-          const { realExit } = await import('../lib/realbook.js');
-          for (const c of closed) {
-            realExit(c, cfg).catch(e =>
-              console.error('[loop] realExit failed:', e.message));
-          }
-        }
-      } catch {}
-    }
-    // v3.24: kill-switch check every tick — equity < 50% of start → realMode OFF.
+    // v3.25: kill-switch check every tick — equity < 50% of start → realMode OFF.
     try {
       const { checkKillSwitch } = await import('../lib/realbook.js');
       await checkKillSwitch();
     } catch {}
-    snapshotEquity(p, priceMap);
   } catch (e) {
     cycleStats.errors++;
     console.error('[loop] price tick failed:', e.message);
@@ -354,8 +339,8 @@ async function priceTick() {
 }
 
 export function getStateSnapshot() {
-  const p = getPortfolio();
-  const stats = p ? statsFor(p, priceMap) : null;
+  // v3.25 REAL-ONLY: the paper portfolio is gone. The new UI reads
+  // /api/realbook. This snapshot keeps pipeline/learning/queue visibility.
   let brain = null, exitRules = null;
   try { brain = getBrainStats(); } catch { /* noop */ }
   try {
@@ -379,14 +364,8 @@ export function getStateSnapshot() {
       aggressiveMode: !!cfg.aggressiveMode, pumpMinMc: cfg.pumpMinMc,
       rugShield: isRugShieldOn(),
     } : null,
-    portfolio: p ? {
-      bankroll0: p.bankroll0, cash: p.cash,
-      equity: (p.equity || []).slice(-200),
-      positions: p.positions || [],
-      closed: (p.closed || []).slice(0, 50),
-      signals: (p.signals || []).slice(0, 80),
-    } : null,
-    stats,
+    portfolio: null, // v3.25: paper removed — see /api/realbook
+    stats: null,
     feeds: lastFeedRows,
     brain,
     exitRules,
@@ -405,8 +384,9 @@ export function getStateSnapshot() {
 }
 
 export function getClosedTrades(limit = 50) {
-  const p = getPortfolio();
-  return ((p && p.closed) || []).slice(0, Math.min(200, Math.max(1, limit)));
+  // v3.25: real closed trades (paper removed).
+  const R = getRealBook();
+  return ((R && R.closed) || []).slice(0, Math.min(200, Math.max(1, limit)));
 }
 
 export async function startLoop() {
@@ -430,10 +410,12 @@ export async function startLoop() {
   } catch {}
   console.log('[loop] aggressive mode:', cfg.aggressiveMode ? 'ON' : 'off');
   await initLearning();
-  await initPortfolio(cfg);
-  // v3.24: real-money book — separate from paper, off by default.
+  // v3.25: paper portfolio removed — real book is the only ledger.
   await initRealBook();
   await loadRealModeFlag();
+  // Safety: if realMode isn't on, the pipeline still runs (signals/vetting/
+  // research) but processSignal's realEnter will skip via isRealMode().
+  // Real trading requires realMode=true in tuning + REAL_WALLET_KEY env.
   probePumpPortal();
 
   // Smart-flow watcher (dormant without HELIUS_API_KEY).
@@ -501,7 +483,7 @@ const TUNABLE_KEYS = [
   'minTokenScore', 'takeProfit', 'stopLoss', 'trailingStop',
   'maxPositions', 'cooldownMin', 'minVol24hUsd', 'solSizeBase', 'solSizeMid', 'solSizeTop',
   'maxDevPct', 'maxTopHolderPct', 'maxTop10Pct', 'maxHoldHours', // v3.20: smart shield tuning
-  'realMaxSizePct', 'priorityFeeLamports', // v3.24: real-money tunables
+  'realMaxSizePct', 'priorityFeeLamports', 'jitoTipLamports', // v3.24-25: real-money tunables
 ];
 export function applyTuningPatch(target, patch) {
   const applied = {};
@@ -555,12 +537,7 @@ export function getTuning() {
   return tuningSnapshot();
 }
 
-// v3.19: fund the paper bankroll (default 1 SOL). Fresh cash + equity curve,
-// past closed trades carry over, learning ledgers untouched.
+// v3.25: paper bankroll removed — stub kept so imports don't break.
 export async function fundBankroll(sol) {
-  const { resetPortfolio } = await import('../lib/paper.js');
-  let spx = 150;
-  try { spx = await solPrice(); } catch { /* fallback */ }
-  const out = await resetPortfolio(sol || 1, spx);
-  return { ok: true, ...out, solPrice: spx };
+  throw new Error('paper trading removed in v3.25 — bot is real-only');
 }

@@ -1,4 +1,8 @@
 // Paper trading engine — server-side edition (ported from the frontend desk).
+// *** v3.25: BYPASSED — the bot is REAL-ONLY. This module is no longer called
+// from the pipeline loop. Kept on disk (imports intact) for reference; the
+// identical decision logic now lives in src/lib/realtrade.js operating on
+// the real book (src/lib/realbook.js). ***
 // Fake money, real signals. The portfolio persists in ab_desk_state
 // (durable when a DB is present) via an in-memory mirror + write-through.
 // Nothing here touches real funds. Never promises profit.
