@@ -202,6 +202,17 @@ export async function tickReal(priceMap, eliteSwaps, cfg) {
   let rules = null;
   try { rules = getExitRules(cfg); } catch { rules = null; }
 
+  // v3.31: WALLET RECONCILIATION — detect manual sells before evaluating exits.
+  // If the user sold from the wallet, the position is marked MANUALLY_CLOSED
+  // (not "unexitable") with the current market price for P&L.
+  try {
+    const { reconcilePositions } = await import('./realbook.js');
+    const manualClosed = await reconcilePositions(priceMap);
+    if (manualClosed.length) closed.push(...manualClosed);
+  } catch (e) {
+    console.error('[realtrade] reconcile failed:', e.message);
+  }
+
   for (const pos of [...(R.positions || [])]) {
     const t = priceMap[pos.mint];
     // v3.24: MAX HOLD TIME — memecoin that hasn't hit TP in 4h is a zombie.

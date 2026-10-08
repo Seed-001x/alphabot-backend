@@ -701,6 +701,95 @@ export async function realClosePosition(mint, exitReason, cfg) {
   return trade;
 }
 
+// ------------------------------------------------------------ wallet reconciliation
+/**
+ * v3.31: WALLET RECONCILIATION — detect manual sells.
+ * Called at the start of each tickReal cycle. For each open position,
+ * verifies the wallet still holds the tokens on-chain. If the balance
+ * is zero or dust (user sold manually from the wallet), closes the book
+ * entry as MANUALLY_CLOSED using the current market price for P&L.
+ * Does NOT attempt an on-chain sell — the tokens are already gone.
+ * Returns the closed trades.
+ */
+export async function reconcilePositions(priceMap = {}) {
+  if (!R || !isRealMode()) return [];
+  const positions = R.positions || [];
+  if (!positions.length) return [];
+
+  let walletState;
+  try {
+    walletState = await realWalletState(positions.map(p => p.mint));
+  } catch (e) {
+    console.error('[realbook] reconcile: wallet read failed:', e.message);
+    return []; // fail-safe: don't touch positions if we can't read the wallet
+  }
+
+  const closed = [];
+  const now = Date.now();
+
+  for (const pos of [...positions]) {
+    const bal = walletState.tokens[pos.mint];
+    const raw = bal ? (bal.raw || 0) : 0;
+
+    // Check if balance is gone or just dust (< 2% of what we bought)
+    const expectedTokens = pos.tokensOut || 0;
+    const isDust = expectedTokens > 0 && raw < expectedTokens * 0.02;
+    if (raw > 0 && !isDust) continue; // position intact
+
+    // No on-chain balance (or dust) — user sold manually from the wallet.
+    // Use current market price for exit estimate.
+    const t = priceMap[pos.mint] || {};
+    const curMc = t.mc || null;
+    const entryMc = pos.entryMc || 0;
+    const multiple = (curMc && entryMc > 0) ? curMc / entryMc : 1;
+    const proceedsUsd = (pos.sizeUsd || 0) * multiple;
+    const pnlUsd = proceedsUsd - (pos.sizeUsd || 0);
+
+    console.log(`[realbook] MANUALLY_CLOSED ${pos.symbol} — no on-chain balance, est. ${multiple.toFixed(2)}x (${isDust ? 'dust' : 'zero'})`);
+
+    const trade = {
+      mint: pos.mint, symbol: pos.symbol, name: pos.name,
+      solSize: pos.solSize, sizeUsd: pos.sizeUsd,
+      proceedsUsd, pnlUsd,
+      multiple,
+      entryTxSig: pos.entryTxSig, exitTxSig: null, // no on-chain exit by bot
+      entryTs: pos.entryTs, exitTs: now,
+      holdMs: now - pos.entryTs,
+      exitReason: `👆 manually closed — sold from wallet (no on-chain balance)${curMc ? ` @ ~${multiple.toFixed(2)}x` : ''}`,
+      score: pos.score, real: true,
+      manualClose: true,
+    };
+
+    // Remove from open positions
+    const idx = R.positions.findIndex(x => x.mint === pos.mint);
+    if (idx >= 0) R.positions.splice(idx, 1);
+
+    R.closed = [trade, ...(R.closed || [])].slice(0, 500);
+    R.cooldowns = { ...(R.cooldowns || {}), [pos.mint]: now };
+
+    // Learning journal
+    try {
+      const { logTradeExit } = await import('./learning.js');
+      logTradeExit(trade);
+    } catch { /* journal is a nicety */ }
+
+    // Events for UI / trade history
+    floorEmit('manual_close', {
+      mint: pos.mint, symbol: pos.symbol, name: pos.name,
+      pnlUsd, multiple, exitReason: trade.exitReason,
+    });
+    floorEmit('risk.exit', {
+      mint: pos.mint, symbol: pos.symbol, name: pos.name,
+      exitReason: trade.exitReason, pnlUsd, multiple, learned: false,
+    });
+
+    closed.push(trade);
+  }
+
+  if (closed.length) persist();
+  return closed;
+}
+
 // ------------------------------------------------------------ kill switch
 export async function realEquityUsd() {
   if (!R) return null;
