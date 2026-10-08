@@ -121,7 +121,7 @@ export async function rpcPost(method, params, timeoutMs = 15000) {
   throw lastErr || new Error('rpc: all endpoints failed');
 }
 
-async function jupQuote(inputMint, outputMint, amount, slippageBps) {
+export async function jupQuote(inputMint, outputMint, amount, slippageBps) {
   const u = `${JUP_QUOTE}?inputMint=${inputMint}&outputMint=${outputMint}` +
     `&amount=${amount}&slippageBps=${slippageBps}&onlyDirectRoutes=false`;
   const r = await fetchRetry(u, { signal: AbortSignal.timeout(15000) });

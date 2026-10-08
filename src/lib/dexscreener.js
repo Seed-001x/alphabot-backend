@@ -91,6 +91,11 @@ export function tokenView(pair) {
   const mc = +(pair.marketCap || 0) || fdv;
   const liq = pair.liquidity && pair.liquidity.usd != null ? +pair.liquidity.usd : null;
   const vol24h = pair.volume && pair.volume.h24 != null ? +pair.volume.h24 : null;
+  // v3.26: intraday volume windows for wash-spike detection (90%+ of 24h vol
+  // in the last 5 min = fake volume, not real interest).
+  const volM5 = pair.volume && pair.volume.m5 != null ? +pair.volume.m5 : null;
+  const volH1 = pair.volume && pair.volume.h1 != null ? +pair.volume.h1 : null;
+  const volH6 = pair.volume && pair.volume.h6 != null ? +pair.volume.h6 : null;
   const tx = pair.txns && pair.txns.h24 ? pair.txns.h24 : null;
   return {
     address: pair.baseToken.address,
@@ -100,7 +105,7 @@ export function tokenView(pair) {
     price, fdv: fdv || null, mc: mc || null,
     supply: price && fdv ? fdv / price : null,
     liquidity: liq,
-    vol24h,
+    vol24h, volM5, volH1, volH6,
     buys24h: tx ? tx.buys : null,
     sells24h: tx ? tx.sells : null,
     createdAt: pair.pairCreatedAt || null,

@@ -147,6 +147,19 @@ export async function fetchRugReport(mint) {
     // Bundles split across many wallets with similar sizes to dodge top-holder
     // checks. Natural distributions are power-law; bundles are flat clusters.
     const bundle = analyzeBundle(holders, creator);
+    // v3.26: LP lock — for graduated coins, the dev must not be able to pull
+    // the pool. markets[].lp.lpLockedPct = % of LP supply locked/burned.
+    let lpLockedPct = null;
+    try {
+      const markets = d.markets || [];
+      let best = null;
+      for (const m of markets) {
+        const lp = m && m.lp;
+        if (!lp || lp.lpLockedPct == null) continue;
+        if (best == null || lp.lpLockedUSD > (best.lpLockedUSD || 0)) best = lp;
+      }
+      if (best) lpLockedPct = Number(best.lpLockedPct);
+    } catch { /* fail-open */ }
     const report = {
       topPct,
       top10Pct,
@@ -159,6 +172,7 @@ export async function fetchRugReport(mint) {
       bundleScore: bundle.score,      // 0-100, higher = more bundled
       bundleWallets: bundle.wallets,  // count of suspected bundle wallets
       bundlePct: bundle.pct,          // combined % held by bundle wallets
+      lpLockedPct,                    // v3.26: % of LP locked (graduated coins)
     };
     reportCache.set(mint, { report, ts: now });
     return report;

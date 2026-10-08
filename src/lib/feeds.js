@@ -43,8 +43,15 @@ export function recordSnapshots(cands) {
   } catch { /* fail-open */ }
 }
 
-export function computeMovers(limit = 40) {
+// v3.26: raw snapshot accessor for the antiscam mover-quality bonus.
+export function getSnapshot(mint) {
   try {
+    const s = loadStore();
+    return s[mint] || null;
+  } catch { return null; }
+}
+
+export function computeMovers(limit = 40) {  try {
     const s = loadStore();
     const now = Date.now();
     const out = [];

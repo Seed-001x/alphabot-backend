@@ -30,7 +30,7 @@ export const DEFAULT_CONFIG = {
   minBuys24h: 3,         // v3.10: wider net — was 5
   requireSells: true,
   maxDevPct: 25,
-  minHolders: 5,         // v3.10: wider net — was 10
+  minHolders: 300,         // v3.26: hard floor — enforced as a kill gate, no exceptions
   maxTopHolderPct: 35,
   maxTop10Pct: 70,
   eliteBoost: 8,

@@ -573,10 +573,40 @@ export async function realClosePosition(mint, exitReason, cfg) {
     return null;
   }
   if (!tokenBal || !(tokenBal.raw > 0)) {
-    console.log('[realbook] no token balance to sell for', pos.symbol);
+    // v3.26 CLOSE GUARANTEE: never silently drop. Retry the wallet read once
+    // (RPC flakiness), then log an "unexitable — removed" trade so the UI
+    // and history show what happened instead of the position vanishing.
+    try {
+      await new Promise(r => setTimeout(r, 1500));
+      const st2 = await realWalletState([pos.mint]);
+      const bal2 = st2.tokens[pos.mint];
+      if (bal2 && bal2.raw > 0) tokenBal = bal2;
+    } catch { /* retry failed → treat as no balance */ }
+  }
+  if (!tokenBal || !(tokenBal.raw > 0)) {
+    console.log('[realbook] no on-chain balance for', pos.symbol, '— logging unexitable removal');
+    const now0 = Date.now();
+    const trade0 = {
+      mint: pos.mint, symbol: pos.symbol, name: pos.name,
+      solSize: pos.solSize, sizeUsd: pos.sizeUsd,
+      proceedsUsd: 0, pnlUsd: -(pos.sizeUsd || 0),
+      multiple: 0,
+      entryTxSig: pos.entryTxSig, exitTxSig: null,
+      entryTs: pos.entryTs, exitTs: now0,
+      holdMs: now0 - pos.entryTs,
+      exitReason: `${exitReason} · unexitable — removed (no on-chain balance)`,
+      score: pos.score, real: true,
+    };
     R.positions.splice(idx, 1);
+    R.closed = [trade0, ...(R.closed || [])].slice(0, 500);
+    R.cooldowns = { ...(R.cooldowns || {}), [pos.mint]: now0 };
+    try {
+      const { logTradeExit } = await import('./learning.js');
+      logTradeExit(trade0);
+    } catch { /* journal is a nicety */ }
     persist();
-    return null;
+    floorEmit('real.unexitable', { mint: pos.mint, symbol: pos.symbol, reason: 'no on-chain balance' });
+    return trade0;
   }
 
   console.log(`[realbook] SELL ${pos.symbol} (${tokenBal.raw} base units)`);
@@ -589,7 +619,42 @@ export async function realClosePosition(mint, exitReason, cfg) {
   } catch (e) {
     console.error('[realbook] sell FAILED:', e.message);
     floorEmit('real.sell_fail', { mint: pos.mint, symbol: pos.symbol, error: e.message });
+    // v3.26 CLOSE GUARANTEE: keep retrying transient failures, but after 3
+    // consecutive sell failures log "unexitable — removed" instead of
+    // holding a dead position forever.
+    const fails = (R.sellFailCount = R.sellFailCount || {});
+    fails[pos.mint] = (fails[pos.mint] || 0) + 1;
+    persist();
+    if (fails[pos.mint] >= 3) {
+      const now1 = Date.now();
+      const trade1 = {
+        mint: pos.mint, symbol: pos.symbol, name: pos.name,
+        solSize: pos.solSize, sizeUsd: pos.sizeUsd,
+        proceedsUsd: 0, pnlUsd: -(pos.sizeUsd || 0),
+        multiple: 0,
+        entryTxSig: pos.entryTxSig, exitTxSig: null,
+        entryTs: pos.entryTs, exitTs: now1,
+        holdMs: now1 - pos.entryTs,
+        exitReason: `${exitReason} · unexitable — removed (sell failed ${fails[pos.mint]}×: ${(e.message || '').slice(0, 80)})`,
+        score: pos.score, real: true,
+      };
+      delete fails[pos.mint];
+      R.positions.splice(idx, 1);
+      R.closed = [trade1, ...(R.closed || [])].slice(0, 500);
+      R.cooldowns = { ...(R.cooldowns || {}), [pos.mint]: now1 };
+      try {
+        const { logTradeExit } = await import('./learning.js');
+        logTradeExit(trade1);
+      } catch { /* journal is a nicety */ }
+      persist();
+      floorEmit('real.unexitable', { mint: pos.mint, symbol: pos.symbol, reason: 'sell failed 3x' });
+      return trade1;
+    }
     return null; // keep position open; retry next tick
+  }
+  // Sell succeeded — clear any failure count for this mint.
+  if (R.sellFailCount && R.sellFailCount[pos.mint]) {
+    delete R.sellFailCount[pos.mint];
   }
 
   let spx = 150;

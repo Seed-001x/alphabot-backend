@@ -10,6 +10,7 @@ import {
   curveProgress, isOnCurve, PUMP_SUFFIX,
 } from './pumpfun.js';
 import { buildFeeds, momentumScore } from './feeds.js';
+import { washSpikeCheck, holderGate, lpLockCheck } from './antiscam.js';
 import { AGGRESSIVE_MOMENTUM_WEIGHT } from './config.js';
 import { getAdaptiveWeights } from './learning.js';
 import { getPumpPortalMints, probePumpPortal } from './pumpportal.js';
@@ -164,6 +165,12 @@ export function freeKill(t, cfg) {
   const hi = t.graduated ? cfg.maxMc : cfg.pumpMaxMc;
   if (mc < lo) return `MC ${fmtUsd(mc)} < ${fmtUsd(lo)} floor`;
   if (mc > hi) return `MC ${fmtUsd(mc)} > ${fmtUsd(hi)} cap`;
+  // v3.26 ANTISCAM: wash-spike detection — 90%+ of 24h volume in the last
+  // 5 minutes = fake volume (wash trading), not real interest.
+  try {
+    const ws = washSpikeCheck(t);
+    if (!ws.pass) return ws.reason;
+  } catch { /* fail-open */ }
   return null;
 }
 
@@ -303,6 +310,24 @@ export async function vetToken(t, cfg) {
   if (reason) {
     floorEmit('vet.kill', { mint: t.address, symbol: t.symbol, name: t.name, killPass: 'rug', killReason: reason });
     return { verdict: 'KILLED', killReason: reason, killPass: 'rug', dossier, t };
+  }
+  // v3.26 ANTISCAM: holder floor — minimum 300 holders, no exceptions.
+  // Fail closed: no holder data = uncertain = skip.
+  {
+    const hg = holderGate(dossier);
+    if (!hg.pass) {
+      floorEmit('vet.kill', { mint: t.address, symbol: t.symbol, name: t.name, killPass: 'holders', killReason: hg.reason });
+      return { verdict: 'KILLED', killReason: hg.reason, killPass: 'holders', dossier, t };
+    }
+  }
+  // v3.26 ANTISCAM: LP lock — graduated coins must have >=80% of LP locked.
+  // On-curve coins pass automatically (the curve can't be LP-pulled).
+  {
+    const lp = lpLockCheck(dossier, t.graduated);
+    if (!lp.pass) {
+      floorEmit('vet.kill', { mint: t.address, symbol: t.symbol, name: t.name, killPass: 'lplock', killReason: lp.reason });
+      return { verdict: 'KILLED', killReason: lp.reason, killPass: 'lplock', dossier, t };
+    }
   }
   const { score, breakdown, adapted, weights } = scoreToken(t, dossier, cfg);
   floorEmit('vet.scored', {

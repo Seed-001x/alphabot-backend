@@ -178,6 +178,12 @@ async function scanCycle() {
     // VET: kill chain (free → trade → rug, ascending cost) via vetToken.
     // Kills go to the kill ledger + signal log; survivors queue for research.
     // v3.23: parallel batches of 5 — analyze multiple coins at once, not 1 by 1.
+    // v3.26: movers-first — the movers feed is now the primary driver.
+    // Candidates tagged 'movers' (15-60 min old, real momentum) drain before
+    // fresh-launch snipes. Snipes still run; they just wait behind movers.
+    try {
+      Q.vet.sortBy(t => (t.feeds && t.feeds.includes('movers')) ? 1 : 0);
+    } catch { /* keep fifo */ }
     const vetBatch = Q.vet.drain(VET_PER_CYCLE);
     for (let i = 0; i < vetBatch.length; i += 5) {
       const chunk = vetBatch.slice(i, i + 5);

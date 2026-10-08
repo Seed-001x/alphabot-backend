@@ -24,6 +24,7 @@ import { floorEmit } from './events.js';
 import { exitPolicy, getExitRules } from './exits.js';
 import { thinkEntry, thinkExit } from './freethinker.js';
 import { m5EntryPenalty } from './learning.js';
+import { honeypotCheck, moverQualityBonus } from './antiscam.js';
 import { fmtUsd, fmtDur } from './fmt.js';
 import {
   getRealBook, realEnter, realClosePosition,
@@ -61,7 +62,15 @@ export async function processSignal(r, cfg, opts = {}) {
   else if (t.moverSetup === 'momentum') moverBonus = 5;
   // Learned post-pump fade (movers bypass — proven momentum).
   const m5pen = t.moverSetup ? 0 : m5EntryPenalty(t.priceChange?.m5);
-  const finalScore = Math.max(0, Math.min(100, score + boost + moverBonus - m5pen));
+  // v3.26: mover quality bonus — rewards real momentum plays:
+  // +10 holders >= 300 · +8 sustained volume 15+ min · +5 gradual MC climb.
+  let qualityBonus = 0, qualityLine = '';
+  try {
+    const qb = moverQualityBonus(t, r.dossier);
+    qualityBonus = qb.bonus || 0;
+    qualityLine = qb.line || '';
+  } catch { /* fail-open */ }
+  const finalScore = Math.max(0, Math.min(100, score + boost + moverBonus + qualityBonus - m5pen));
   const sig = {
     ...base, verdict: 'SCORED',
     score: finalScore, rawScore: r.score,
@@ -76,6 +85,7 @@ export async function processSignal(r, cfg, opts = {}) {
     // (v3.25 fix: these crashed paper.js when set before declaration)
     ...(moverBonus > 0 ? { moverBonus: `${t.moverSetup} +${moverBonus}` } : {}),
     ...(m5pen > 0 ? { m5Penalty: m5pen } : {}),
+    ...(qualityBonus > 0 ? { qualityBonus: `+${qualityBonus} (${qualityLine})` } : {}),
   };
 
   const R = getRealBook();
@@ -144,6 +154,23 @@ export async function processSignal(r, cfg, opts = {}) {
     // v3.20: bundle distribution tracking.
     bundleAtEntry: r.dossier && r.dossier.bundlePct != null ? r.dossier.bundlePct : null,
   };
+
+  // v3.26 ANTISCAM: honeypot simulation — get a Jupiter SELL quote before
+  // committing real SOL. No route or dust output = unexitable = skip.
+  try {
+    const hp = await honeypotCheck(t.address, 6);
+    if (!hp.pass) {
+      sig.reason = `SCORED ${finalScore} · no entry: ${hp.reason}`;
+      floorEmit('trade.skip', { mint: t.address, symbol: t.symbol, name: t.name, score: finalScore, reason: hp.reason });
+      return done(sig, false);
+    }
+  } catch (e) {
+    // Honeypot check itself errored (not a fail) — fail closed: skip.
+    const reason = 'honeypot check errored — uncertain, skip';
+    sig.reason = `SCORED ${finalScore} · no entry: ${reason}`;
+    floorEmit('trade.skip', { mint: t.address, symbol: t.symbol, name: t.name, score: finalScore, reason });
+    return done(sig, false);
+  }
 
   // REAL-ONLY: execute on-chain. realEnter applies the real-money guardrails
   // (kill switch, position cap, wallet balance, dust floor) and fails closed.

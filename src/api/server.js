@@ -158,42 +158,27 @@ app.post('/api/admin/realmode', async (req, res) => {
 
 app.post('/api/admin/close-positions', async (req, res) => {
   try {
-    const { ensureRealBook, getRealBook } = await import('../lib/realbook.js');
+    const { ensureRealBook, getRealBook, realClosePosition } = await import('../lib/realbook.js');
     await ensureRealBook();
     const R = getRealBook();
     if (!R) return res.status(500).json({ ok: false, error: 'no book' });
     const { mints, all } = req.body || {};
-    const now = Date.now();
+    // v3.26 CLOSE GUARANTEE: every close goes through realClosePosition,
+    // which attempts the on-chain sell first. No silent book deletions.
+    const { loadConfig } = await import('../lib/config.js');
+    const cfg = loadConfig();
     const closed = [];
-    const keep = [];
-    for (const pos of (R.positions || [])) {
+    for (const pos of [...(R.positions || [])]) {
       if (all || (mints && mints.includes(pos.mint))) {
-        const trade = {
-          mint: pos.mint, symbol: pos.symbol, name: pos.name,
-          solSize: pos.solSize, sizeUsd: pos.sizeUsd,
-          proceedsUsd: 0, pnlUsd: -(pos.sizeUsd || 0),
-          multiple: 0,
-          entryTxSig: pos.entryTxSig, exitTxSig: null,
-          entryTs: pos.entryTs, exitTs: now,
-          holdMs: now - pos.entryTs,
-          exitReason: '🧹 admin force-close (zombie, no on-chain sell)',
-          score: pos.score, real: true,
-        };
-        R.closed = [trade, ...(R.closed || [])].slice(0, 500);
-        R.cooldowns = { ...(R.cooldowns || {}), [pos.mint]: now };
-        closed.push({ symbol: pos.symbol, mint: pos.mint });
-      } else {
-        keep.push(pos);
+        try {
+          const trade = await realClosePosition(pos.mint, '🧹 admin close', cfg);
+          closed.push({ symbol: pos.symbol, mint: pos.mint, sold: !!trade, reason: trade ? trade.exitReason : 'still open — will retry' });
+        } catch (e) {
+          closed.push({ symbol: pos.symbol, mint: pos.mint, sold: false, error: e.message });
+        }
       }
     }
-    R.positions = keep;
-    const { pool } = await import('../db/pool.js');
-    await pool.query(
-      `INSERT INTO ab_desk_state (id, state, updated_at) VALUES (2, $1::jsonb, NOW())
-       ON CONFLICT (id) DO UPDATE SET state = EXCLUDED.state, updated_at = NOW()`,
-      [JSON.stringify(R)]
-    ).catch(() => {});
-    res.json({ ok: true, closed: closed.length, symbols: closed.map(c => c.symbol) });
+    res.json({ ok: true, closed });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e && e.message || e) });
   }
