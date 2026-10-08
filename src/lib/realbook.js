@@ -52,6 +52,35 @@ export function freshRealBook(startUsd, startSol) {
   };
 }
 
+/** v3.25: Restore fills from ab_real_fills table. Called on every startup path. */
+async function restoreFillsFromDb() {
+  if (!hasDb || !R) return;
+  try {
+    const fr = await pool.query(
+      `SELECT mint, symbol, side, quoted_price_sol, fill_price_sol, slippage_bps, sol_amount, tx_sig, created_at
+       FROM ab_real_fills ORDER BY created_at DESC LIMIT 500`
+    );
+    const dbFills = (fr.rows || []).reverse().map(r => ({
+      mint: r.mint, symbol: r.symbol, side: r.side,
+      quotedPriceSol: r.quoted_price_sol ? Number(r.quoted_price_sol) : null,
+      fillPriceSol: r.fill_price_sol ? Number(r.fill_price_sol) : null,
+      slippageBps: r.slippage_bps ? Number(r.slippage_bps) : null,
+      solAmount: r.sol_amount ? Number(r.sol_amount) : null,
+      txSig: r.tx_sig, ts: new Date(r.created_at).getTime(),
+    }));
+    const seen = new Set((R.fills || []).map(f => f.txSig).filter(Boolean));
+    for (const f of dbFills) {
+      if (f.txSig && seen.has(f.txSig)) continue;
+      R.fills = [...(R.fills || []), f];
+      if (f.txSig) seen.add(f.txSig);
+    }
+    R.fills = (R.fills || []).slice(-500);
+    console.log(`[realbook] restored ${(R.fills || []).length} fills from DB`);
+  } catch (e) {
+    console.error('[realbook] fills restore failed:', e.message);
+  }
+}
+
 export async function initRealBook() {
   if (initPromise) return initPromise;
   initPromise = (async () => {
@@ -62,32 +91,7 @@ export async function initRealBook() {
           R = rows[0].state;
           hydrated = true;
           console.log(`[realbook] restored: $${(R.cash || 0).toFixed(2)} cash, ${(R.positions || []).length} open, startSol ${(R.startSol || 0).toFixed(4)} (LOCKED)`);
-          // v3.25: restore fills from ab_real_fills table (survives restarts even if state wasn't persisted)
-          try {
-            const fr = await pool.query(
-              `SELECT mint, symbol, side, quoted_price_sol, fill_price_sol, slippage_bps, sol_amount, tx_sig, created_at
-               FROM ab_real_fills ORDER BY created_at DESC LIMIT 500`
-            );
-            const dbFills = (fr.rows || []).reverse().map(r => ({
-              mint: r.mint, symbol: r.symbol, side: r.side,
-              quotedPriceSol: r.quoted_price_sol ? Number(r.quoted_price_sol) : null,
-              fillPriceSol: r.fill_price_sol ? Number(r.fill_price_sol) : null,
-              slippageBps: r.slippage_bps ? Number(r.slippage_bps) : null,
-              solAmount: r.sol_amount ? Number(r.sol_amount) : null,
-              txSig: r.tx_sig, ts: new Date(r.created_at).getTime(),
-            }));
-            // Merge: DB fills are source of truth, dedupe by txSig
-            const seen = new Set((R.fills || []).map(f => f.txSig).filter(Boolean));
-            for (const f of dbFills) {
-              if (f.txSig && seen.has(f.txSig)) continue;
-              R.fills = [...(R.fills || []), f];
-              if (f.txSig) seen.add(f.txSig);
-            }
-            R.fills = (R.fills || []).slice(-500);
-            console.log(`[realbook] restored ${(R.fills || []).length} fills from DB`);
-          } catch (e) {
-            console.error('[realbook] fills restore failed:', e.message);
-          }
+          await restoreFillsFromDb();
           // v3.24: on-chain reconciliation — chain is source of truth.
           // If DB wiped but tokens are on-chain, rebuild positions.
           try { await reconcileOnChain(); } catch (e) {
@@ -243,6 +247,7 @@ export async function ensureRealBook() {
         R = rows[0].state;
         hydrated = true;
         console.log(`[realbook] ensureRealBook restored from DB: ${(R.positions || []).length} open, startSol ${(R.startSol || 0).toFixed(4)} (LOCKED)`);
+        await restoreFillsFromDb();
         return R;
       }
     } catch (e) {
