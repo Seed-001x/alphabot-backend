@@ -70,7 +70,18 @@ export async function processSignal(r, cfg, opts = {}) {
     qualityBonus = qb.bonus || 0;
     qualityLine = qb.line || '';
   } catch { /* fail-open */ }
-  const finalScore = Math.max(0, Math.min(100, score + boost + moverBonus + qualityBonus - m5pen));
+  // v3.32: TA support/resistance filter — don't buy into resistance, prefer
+  // support bounces. Uses recent MC swing high/low from movers history.
+  // Reject (-15) usually gates the entry; boost (+5) lifts the score.
+  let taCheck = null, taAdj = 0, taLine = '';
+  try {
+    const { taEntryCheck } = await import('./ta.js');
+    taCheck = taEntryCheck(t.address, t.mc);
+    taAdj = taCheck.adjustment || 0;
+    if (taCheck.decision === 'reject') taLine = `TA reject: ${taCheck.reason}`;
+    else if (taCheck.decision === 'boost') taLine = `TA boost: ${taCheck.reason}`;
+  } catch { /* fail-open: no TA data = no adjustment */ }
+  const finalScore = Math.max(0, Math.min(100, score + boost + moverBonus + qualityBonus + taAdj - m5pen));
   const sig = {
     ...base, verdict: 'SCORED',
     score: finalScore, rawScore: r.score,
@@ -86,6 +97,7 @@ export async function processSignal(r, cfg, opts = {}) {
     ...(moverBonus > 0 ? { moverBonus: `${t.moverSetup} +${moverBonus}` } : {}),
     ...(m5pen > 0 ? { m5Penalty: m5pen } : {}),
     ...(qualityBonus > 0 ? { qualityBonus: `+${qualityBonus} (${qualityLine})` } : {}),
+    ...(taLine ? { ta: taLine } : {}),
   };
 
   const R = getRealBook();
@@ -99,6 +111,24 @@ export async function processSignal(r, cfg, opts = {}) {
 
   if (STABLE_MINTS.has(t.address)) return gate('stablecoin excluded');
   if (!(finalScore >= cfg.minTokenScore)) return gate(`score ${finalScore} < ${cfg.minTokenScore} bar`);
+  // v3.32: TA resistance gate — buying into the ceiling is a hard skip,
+  // even if the score is fine. Logged to the registry evaluation record.
+  if (taCheck && taCheck.decision === 'reject') {
+    try { floorEmit('ta.reject', { mint: t.address, symbol: t.symbol, reason: taCheck.reason, swingHigh: taCheck.swingHigh }); } catch {}
+    try {
+      const { registryAttachTa } = await import('./registry.js');
+      registryAttachTa(t.address, taCheck);
+    } catch { /* registry is additive */ }
+    return gate(`TA: ${taCheck.reason}`);
+  }
+  // v3.32: log TA boost/neutral decisions to the evaluation record too.
+  if (taCheck && taCheck.decision !== 'skip') {
+    try { floorEmit('ta.check', { mint: t.address, symbol: t.symbol, decision: taCheck.decision, reason: taCheck.reason }); } catch {}
+    try {
+      const { registryAttachTa } = await import('./registry.js');
+      registryAttachTa(t.address, taCheck);
+    } catch { /* registry is additive */ }
+  }
   if (openPositions.length >= cfg.maxPositions) return gate(`max ${cfg.maxPositions} positions open`);
   if (openPositions.some(x => x.mint === t.address)) return gate(`already holding ${t.symbol}`);
   const cd = (R && R.cooldowns || {})[t.address];

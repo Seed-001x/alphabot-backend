@@ -342,6 +342,29 @@ export function registrySize() {
 
 // ---------------------------------------------------------- new async API
 
+// v3.32: attach a TA entry-check decision to the token's most recent
+// evaluation record. Fire-and-forget — the TA gate runs at entry time
+// (after registryRecordVet), so this patches the snapshot JSON on the
+// latest ab_evaluations row for inspectability.
+export function registryAttachTa(mint, taCheck) {
+  if (!mint || !taCheck || !hasDb || !dbHealthy) return;
+  try {
+    const ta = {
+      decision: taCheck.decision || null,
+      reason: (taCheck.reason || '').slice(0, 300),
+      adjustment: taCheck.adjustment || 0,
+      swingHigh: taCheck.swingHigh || null,
+      swingLow: taCheck.swingLow || null,
+      historyPoints: taCheck.historyPoints || null,
+    };
+    pool.query(
+      `UPDATE ab_evaluations SET market_snapshot = market_snapshot || $2::jsonb
+       WHERE id = (SELECT id FROM ab_evaluations WHERE mint = $1 ORDER BY ts DESC LIMIT 1)`,
+      [mint, JSON.stringify({ ta })]
+    ).catch(() => {});
+  } catch { /* fail-open */ }
+}
+
 /** Transition a token's lifecycle state. */
 export async function registrySetState(mint, state, reason = null) {
   const e = reg.get(mint);
