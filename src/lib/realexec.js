@@ -25,9 +25,9 @@ const HELIUS_SENDER = 'https://sender.helius-rpc.com/fast';
 const JITO_ENGINE = 'https://mainnet.block-engine.jito.wtf/api/v1/transactions';
 
 // v3.25: 0.001 SOL priority fee per transaction (user-approved bump from 0.0009).
-export const PRIORITY_FEE_LAMPORTS = 1000000;
+export const PRIORITY_FEE_LAMPORTS = 500000;
 // Jito tip for the dual-route path (standard tier per research).
-export const JITO_TIP_LAMPORTS = 1000000;
+export const JITO_TIP_LAMPORTS = 500000;
 // Jito tip account (from Jito's official examples; overridable via JITO_TIP_ACCOUNT env).
 const JITO_TIP_ACCOUNT = process.env.JITO_TIP_ACCOUNT || '96gYZGLnJYVFmbjzopPSU6QiEV5fGqXkGuYc9p7fSKdZ';
 

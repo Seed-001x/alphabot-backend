@@ -58,7 +58,7 @@ export const DEFAULT_CONFIG = {
   slippage: 0.05,
   // --- REAL-ONLY execution (v3.25) ---
   realMaxSizePct: 0.70,        // max 70% of wallet per trade (tunable)
-  priorityFeeLamports: 1000000, // v3.25: 0.001 SOL priority fee per tx (user-approved bump from 0.0009)
+  priorityFeeLamports: 500000, // v3.33: 0.0005 SOL priority fee per tx (user: maximize small wins)
   jitoTipLamports: 1000000,     // v3.25: 0.001 SOL Jito tip on direct buys (dual-route)
   // --- LOOP ---
   scanIntervalSec: 30,   // v3.14: quicker scans (user 2026-10-06) — was 45s
