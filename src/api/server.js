@@ -128,6 +128,17 @@ app.get('/api/realbook', async (req, res) => {
   }
 });
 
+// v3.27: live pump.fun movers feed for the frontend Opportunities tab.
+app.get('/api/movers', async (req, res) => {
+  try {
+    const { fetchPumpMovers } = await import('../lib/pumpfun.js');
+    const coins = await fetchPumpMovers(60);
+    res.json({ ok: true, coins, ts: Date.now() });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e && e.message || e) });
+  }
+});
+
 // v3.24: dry-run the real entry path — exercises every check without spending.
 // Returns step-by-step diagnostic to verify real trading is wired correctly.
 app.get('/api/realbook/dryrun', async (req, res) => {
