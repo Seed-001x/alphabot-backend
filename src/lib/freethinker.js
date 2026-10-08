@@ -87,23 +87,24 @@ export function thinkEntry(t, cfg, bankrollUsd) {
   tp = Math.round(tp * 100) / 100;
 
   // --- SL: how much noise before the thesis is wrong? ---
-  // Tight for high-conviction (shouldn't go against you), wide for volatile
+  // v3.31: WIDENED per user — only trigger on real dumps, not normal pullbacks.
+  // Tight stops were shaking out winners (Memecoins +781% stopped at -1.2% before running to $100K).
   let sl = cfg.stopLoss; // start from learned base
 
   if (score >= 80) {
-    sl = Math.min(sl, 0.08); // 8% — high conviction, tight leash
-    reasoning.push(`high conviction — SL tightened to 8%`);
+    sl = Math.min(sl, 0.12); // 12% — high conviction, still some room (was 8%)
+    reasoning.push(`high conviction — SL at 12% (dump-only)`);
   } else if (score < 60) {
-    sl = Math.max(sl, 0.15); // 15% — low conviction, more room for noise
-    reasoning.push(`low conviction — SL widened to 15%`);
+    sl = Math.max(sl, 0.20); // 20% — low conviction, wide berth (was 15%)
+    reasoning.push(`low conviction — SL widened to 20%`);
   }
 
   if (vol5m > 20) {
-    sl = Math.max(sl, 0.15); // volatile coins shake out tight stops
-    reasoning.push(`volatile — SL widened to avoid shakeout`);
+    sl = Math.max(sl, 0.20); // volatile coins need room — don't shake out on noise
+    reasoning.push(`volatile — SL widened to 20% to avoid shakeout`);
   }
 
-  sl = clamp(sl, 0.05, 0.25); // 5% min, 25% max
+  sl = clamp(sl, 0.10, 0.30); // 10% min, 30% max (was 5%/25%)
   sl = Math.round(sl * 1000) / 1000;
 
   return { tp, sl, solSize, sizePct, sizeUsd, reasoning };
