@@ -178,17 +178,19 @@ export async function slippageSizeFactor() {
  * position opens. Fail-closed: any error → logs + returns, paper unaffected.
  */
 export async function realEnter(paperPos, t, finalScore, cfg) {
-  if (!isRealMode()) return null;
+  if (!isRealMode()) { floorEmit('real.skip', { mint: paperPos.mint, symbol: t.symbol, reason: 'realMode off' }); return null; }
   try { await ensureRealBook(); } catch (e) {
     console.error('[realbook] ensure failed:', e.message);
+    floorEmit('real.skip', { mint: paperPos.mint, symbol: t.symbol, reason: 'ensure failed: ' + e.message });
     return null;
   }
   if ((R.positions || []).length >= REAL_MAX_POSITIONS) {
     console.log('[realbook] skip: max real positions open');
+    floorEmit('real.skip', { mint: paperPos.mint, symbol: t.symbol, reason: 'max positions' });
     return null;
   }
-  if ((R.positions || []).some(x => x.mint === paperPos.mint)) return null;
-  if (R.killSwitched) return null;
+  if ((R.positions || []).some(x => x.mint === paperPos.mint)) { floorEmit('real.skip', { mint: paperPos.mint, symbol: t.symbol, reason: 'already holding' }); return null; }
+  if (R.killSwitched) { floorEmit('real.skip', { mint: paperPos.mint, symbol: t.symbol, reason: 'kill switched' }); return null; }
 
   // Sizing: same free-thinker logic, capped at 30% of real wallet.
   let spx = 150;
@@ -215,23 +217,27 @@ export async function realEnter(paperPos, t, finalScore, cfg) {
   // Don't trade dust: min 0.01 SOL
   if (!(solSize >= 0.01)) {
     console.log('[realbook] skip: size below 0.01 SOL dust floor');
+    floorEmit('real.skip', { mint: paperPos.mint, symbol: t.symbol, reason: `dust floor (size ${solSize.toFixed(4)})` });
     return null;
   }
   // Can't spend what we don't have (leave 0.02 SOL for fees)
   let walletSol = 0;
   try { walletSol = (await realWalletState()).sol; } catch (e) {
     console.error('[realbook] wallet read failed:', e.message);
+    floorEmit('real.skip', { mint: paperPos.mint, symbol: t.symbol, reason: 'wallet read failed: ' + e.message });
     return null;
   }
   solSize = Math.min(solSize, Math.max(0, walletSol - 0.02));
   if (!(solSize >= 0.01)) {
     console.log('[realbook] skip: insufficient SOL balance');
+    floorEmit('real.skip', { mint: paperPos.mint, symbol: t.symbol, reason: `insufficient SOL (${walletSol.toFixed(4)})` });
     return null;
   }
 
   const quotedPriceSol = t.price ? t.price / 1e9 / spx * 1e9 : null; // best-effort
   void quotedPriceSol;
   console.log(`[realbook] BUY ${t.symbol} ${solSize.toFixed(4)} SOL (score ${finalScore})`);
+  floorEmit('real.buy_attempt', { mint: paperPos.mint, symbol: t.symbol, solSize: +solSize.toFixed(4), score: finalScore });
   let fill;
   try {
     fill = await buyToken(paperPos.mint, solSize, {
