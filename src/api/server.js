@@ -175,6 +175,42 @@ app.post('/api/admin/close-positions', async (req, res) => {
   }
 });
 
+// v3.24: restore a real position to the book (admin — for positions lost in book wipes).
+// POST { position: { mint, symbol, name, solSize, sizeUsd, entryTs, entryTxSig, score, ... } }
+app.post('/api/admin/restore-position', async (req, res) => {
+  try {
+    const { ensureRealBook, getRealBook } = await import('../lib/realbook.js');
+    await ensureRealBook();
+    const R = getRealBook();
+    if (!R) return res.status(500).json({ ok: false, error: 'no book' });
+    const p = req.body && req.body.position;
+    if (!p || !p.mint) return res.status(400).json({ ok: false, error: 'position.mint required' });
+    // Don't duplicate
+    if ((R.positions || []).some(x => x.mint === p.mint)) {
+      return res.json({ ok: true, restored: false, reason: 'already tracked' });
+    }
+    R.positions.push({
+      mint: p.mint, symbol: p.symbol || 'UNK', name: p.name || null,
+      solSize: p.solSize || 0, sizeUsd: p.sizeUsd || 0,
+      entryTs: p.entryTs || Date.now(), entryTxSig: p.entryTxSig || null,
+      entryMc: p.entryMc || null, entryPrice: p.entryPrice || null,
+      quotedOut: p.quotedOut || null,
+      adaptiveTp: p.adaptiveTp ?? null, adaptiveSl: p.adaptiveSl ?? null,
+      score: p.score ?? null, real: true, restored: true,
+    });
+    // persist via the module's persist (import the internal)
+    const { pool } = await import('../db/pool.js');
+    await pool.query(
+      `INSERT INTO ab_desk_state (id, state, updated_at) VALUES (2, $1::jsonb, NOW())
+       ON CONFLICT (id) DO UPDATE SET state = EXCLUDED.state, updated_at = NOW()`,
+      [JSON.stringify(R)]
+    ).catch(() => {});
+    res.json({ ok: true, restored: true, symbol: p.symbol });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e && e.message || e) });
+  }
+});
+
 // v3.21: Learning Room — wallet style profiles.
 import { analyzeStyle, synthesizeStrategy } from '../lib/walletAnalysis.js';
 const styleProfiles = new Map(); // wallet -> { label, profile, ts }
