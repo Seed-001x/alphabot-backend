@@ -25,6 +25,9 @@ let R = null; // in-memory mirror of the real book
 let hydrated = false;
 let realModeOn = false;   // in-memory; persisted to KV
 let killSwitched = false; // set when the kill switch fires
+// v3.24: init gate — ensureRealBook() waits for initRealBook() to finish
+// DB restore before ever creating fresh. Prevents deploy wipes.
+let initPromise = null;
 
 function persist() {
   if (!hasDb || !hydrated || !R) return;
@@ -50,21 +53,25 @@ export function freshRealBook(startUsd, startSol) {
 }
 
 export async function initRealBook() {
-  if (hasDb) {
-    try {
-      const { rows } = await pool.query('SELECT state FROM ab_desk_state WHERE id = 2');
-      if (rows.length && rows[0].state && rows[0].state.version === 1) {
-        R = rows[0].state;
-        hydrated = true;
-        console.log(`[realbook] restored: $${(R.cash || 0).toFixed(2)} cash, ${(R.positions || []).length} open`);
-        return R;
+  if (initPromise) return initPromise;
+  initPromise = (async () => {
+    if (hasDb) {
+      try {
+        const { rows } = await pool.query('SELECT state FROM ab_desk_state WHERE id = 2');
+        if (rows.length && rows[0].state && rows[0].state.version === 1) {
+          R = rows[0].state;
+          hydrated = true;
+          console.log(`[realbook] restored: $${(R.cash || 0).toFixed(2)} cash, ${(R.positions || []).length} open, startSol ${(R.startSol || 0).toFixed(4)} (LOCKED)`);
+          return R;
+        }
+      } catch (e) {
+        console.error('[realbook] restore failed:', e.message);
       }
-    } catch (e) {
-      console.error('[realbook] restore failed:', e.message);
     }
-  }
-  R = null; hydrated = true;
-  return null;
+    R = null; hydrated = true;
+    return null;
+  })();
+  return initPromise;
 }
 
 export function getRealBook() { return R; }
@@ -110,21 +117,28 @@ export async function loadRealModeFlag() {
  * Called once when realMode is turned on with no existing book.
  */
 export async function ensureRealBook() {
+  // v3.24: WAIT for initRealBook() to finish DB restore before doing anything.
+  // This is the lock that prevents deploy wipes — the baseline (startSol)
+  // is sacred and can only be set on very-first init, never overwritten.
+  if (initPromise) {
+    try { await initPromise; } catch {}
+  }
   if (R) return R;
-  // v3.24: try DB restore first — never create fresh if a book exists
+  // Try DB restore (in case initRealBook wasn't called yet)
   if (hasDb) {
     try {
       const { rows } = await pool.query('SELECT state FROM ab_desk_state WHERE id = 2');
       if (rows.length && rows[0].state && rows[0].state.version === 1) {
         R = rows[0].state;
         hydrated = true;
-        console.log(`[realbook] ensureRealBook restored from DB: ${(R.positions || []).length} open`);
+        console.log(`[realbook] ensureRealBook restored from DB: ${(R.positions || []).length} open, startSol ${(R.startSol || 0).toFixed(4)} (LOCKED)`);
         return R;
       }
     } catch (e) {
       console.error('[realbook] ensureRealBook restore failed:', e.message);
     }
   }
+  // VERY FIRST init only — baseline set once from wallet, never again
   const st = await realWalletState();
   let spx = 150;
   try { spx = await solPrice(); } catch {}
@@ -133,7 +147,7 @@ export async function ensureRealBook() {
   R.wallet = st.address;
   hydrated = true;
   persist();
-  console.log(`[realbook] initialized: ${st.sol.toFixed(4)} SOL ≈ $${startUsd.toFixed(2)} @ $${spx.toFixed(0)}/SOL`);
+  console.log(`[realbook] FIRST INIT — baseline LOCKED: ${st.sol.toFixed(4)} SOL ≈ $${startUsd.toFixed(2)} @ $${spx.toFixed(0)}/SOL`);
   return R;
 }
 
