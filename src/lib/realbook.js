@@ -15,6 +15,7 @@ import { pool, hasDb } from '../db/pool.js';
 import { floorEmit } from './events.js';
 import { buyToken, sellToken, realWalletState, realWalletAddress, realExecReady, PRIORITY_FEE_LAMPORTS, JITO_TIP_LAMPORTS } from './realexec.js';
 import { solPrice } from './dexscreener.js';
+import { getKey, fetchWalletTxns } from './helius.js';
 
 const REAL_MAX_POSITIONS = 3;
 const REAL_MAX_SIZE_PCT = 0.30;      // no single trade > 30% of real wallet
@@ -718,11 +719,41 @@ export async function realClosePosition(mint, exitReason, cfg) {
 
 // ------------------------------------------------------------ wallet reconciliation
 /**
+ * v3.34: find the ACTUAL on-chain sell transaction for a manual close.
+ * Scans the wallet's recent enhanced transactions for the most recent
+ * transaction where the wallet sent this token's mint (after entryTs),
+ * and sums the SOL that flowed back into the wallet in that tx.
+ * Returns { sig, solReceived, ts } or null if not found.
+ */
+function findActualManualSellTx(pos, wallet, txns) {
+  if (!txns || !txns.length || !wallet) return null;
+  const entryCutoff = (pos.entryTs || 0) - 60000; // 60s tolerance before entry
+  let best = null;
+  for (const tx of txns) {
+    const ts = (tx.timestamp || 0) * 1000;
+    if (!ts || ts < entryCutoff) continue;
+    if (tx.signature === pos.entryTxSig) continue; // never match our own entry
+    const sent = (tx.tokenTransfers || []).find(t =>
+      t.fromUserAccount === wallet && t.mint === pos.mint && (t.tokenAmount || 0) > 0);
+    if (!sent) continue;
+    // SOL the wallet received in this tx (sale proceeds on pump.fun go straight back as native SOL)
+    const solIn = (tx.nativeTransfers || [])
+      .filter(t => t.toUserAccount === wallet)
+      .reduce((s, t) => s + (t.amount || 0), 0) / 1e9;
+    if (!best || ts > best.ts) best = { sig: tx.signature, solReceived: solIn, ts, tokensSold: sent.tokenAmount };
+  }
+  return best;
+}
+
+/**
  * v3.31: WALLET RECONCILIATION — detect manual sells.
  * Called at the start of each tickReal cycle. For each open position,
  * verifies the wallet still holds the tokens on-chain. If the balance
  * is zero or dust (user sold manually from the wallet), closes the book
- * entry as MANUALLY_CLOSED using the current market price for P&L.
+ * entry as MANUALLY_CLOSED.
+ * v3.34: P&L now uses the ACTUAL sell transaction from Helius (SOL received
+ * on-chain) instead of a price-feed estimate. Falls back to the estimate
+ * (flagged) only if the tx can't be found.
  * Does NOT attempt an on-chain sell — the tokens are already gone.
  * Returns the closed trades.
  */
@@ -741,38 +772,74 @@ export async function reconcilePositions(priceMap = {}) {
 
   const closed = [];
   const now = Date.now();
+  const wallet = realWalletAddress();
 
-  for (const pos of [...positions]) {
+  // Pass 1: detect manual-close candidates (balance gone or dust)
+  const candidates = [];
+  for (const pos of positions) {
     const bal = walletState.tokens[pos.mint];
     const raw = bal ? (bal.raw || 0) : 0;
-
-    // Check if balance is gone or just dust (< 2% of what we bought)
     const expectedTokens = pos.tokensOut || 0;
     const isDust = expectedTokens > 0 && raw < expectedTokens * 0.02;
     if (raw > 0 && !isDust) continue; // position intact
+    candidates.push({ pos, isDust });
+  }
+  if (!candidates.length) return [];
 
-    // No on-chain balance (or dust) — user sold manually from the wallet.
-    // Use current market price for exit estimate.
-    const t = priceMap[pos.mint] || {};
-    const curMc = t.mc || null;
-    const entryMc = pos.entryMc || 0;
-    const multiple = (curMc && entryMc > 0) ? curMc / entryMc : 1;
-    const proceedsUsd = (pos.sizeUsd || 0) * multiple;
-    const pnlUsd = proceedsUsd - (pos.sizeUsd || 0);
+  // Pass 2: fetch recent wallet txns ONCE so every candidate can look up its actual sell.
+  // Fail-open: if Helius is unavailable we fall back to the price estimate per position.
+  let walletTxns = null;
+  try {
+    const key = getKey();
+    if (key && wallet) walletTxns = await fetchWalletTxns(wallet, key, 40);
+  } catch (e) {
+    console.error('[realbook] reconcile: tx history read failed (using estimates):', e.message);
+    walletTxns = null;
+  }
 
-    console.log(`[realbook] MANUALLY_CLOSED ${pos.symbol} — no on-chain balance, est. ${multiple.toFixed(2)}x (${isDust ? 'dust' : 'zero'})`);
+  let spx = 150;
+  try { spx = await solPrice(); } catch {}
+
+  for (const { pos, isDust } of candidates) {
+    let proceedsUsd, pnlUsd, multiple, exitTxSig, exitReason, actual;
+
+    // Try the ACTUAL on-chain sell first
+    const sell = findActualManualSellTx(pos, wallet, walletTxns);
+    if (sell && sell.solReceived > 0) {
+      actual = true;
+      proceedsUsd = sell.solReceived * spx;
+      pnlUsd = proceedsUsd - (pos.sizeUsd || 0);
+      multiple = (pos.sizeUsd || 0) > 0 ? proceedsUsd / pos.sizeUsd : 1;
+      exitTxSig = sell.sig;
+      const pnlStr = `${pnlUsd >= 0 ? '+' : ''}$${pnlUsd.toFixed(2)}`;
+      exitReason = `👆 manually closed — sold from wallet (actual on-chain: ${pnlStr} / ${multiple.toFixed(2)}x)`;
+      console.log(`[realbook] MANUALLY_CLOSED ${pos.symbol} — actual sell ${sell.sig.slice(0, 12)}…: ${sell.solReceived.toFixed(4)} SOL in (${multiple.toFixed(2)}x, pnl ${pnlStr})`);
+    } else {
+      // Fallback: price-feed estimate, flagged as estimated
+      actual = false;
+      const t = priceMap[pos.mint] || {};
+      const curMc = t.mc || null;
+      const entryMc = pos.entryMc || 0;
+      multiple = (curMc && entryMc > 0) ? curMc / entryMc : 1;
+      proceedsUsd = (pos.sizeUsd || 0) * multiple;
+      pnlUsd = proceedsUsd - (pos.sizeUsd || 0);
+      exitTxSig = null;
+      exitReason = `👆 manually closed — sold from wallet (no on-chain balance${curMc ? ` @ ~${multiple.toFixed(2)}x` : ''}, estimated)`;
+      console.log(`[realbook] MANUALLY_CLOSED ${pos.symbol} — no on-chain tx found, est. ${multiple.toFixed(2)}x (${isDust ? 'dust' : 'zero'}) [ESTIMATED]`);
+    }
 
     const trade = {
       mint: pos.mint, symbol: pos.symbol, name: pos.name,
       solSize: pos.solSize, sizeUsd: pos.sizeUsd,
       proceedsUsd, pnlUsd,
       multiple,
-      entryTxSig: pos.entryTxSig, exitTxSig: null, // no on-chain exit by bot
+      entryTxSig: pos.entryTxSig, exitTxSig,
       entryTs: pos.entryTs, exitTs: now,
       holdMs: now - pos.entryTs,
-      exitReason: `👆 manually closed — sold from wallet (no on-chain balance)${curMc ? ` @ ~${multiple.toFixed(2)}x` : ''}`,
+      exitReason,
       score: pos.score, real: true,
       manualClose: true,
+      manualCloseActual: actual, // true = on-chain tx, false = price estimate
     };
 
     // Remove from open positions
