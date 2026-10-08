@@ -133,8 +133,7 @@ app.get('/api/realbook', async (req, res) => {
 // for the top 30 by MC. Enrichment is display-only and fail-open.
 // v3.29: graduated PumpSwap runners merged in (tagged graduated: true) so
 // the tab shows the same post-graduation movers the bot now tracks.
-app.get('/api/movers', async (req, res) => {
-  try {
+app.get('/api/movers', async (req, res) => {  try {
     const { fetchPumpMovers, fetchPumpSwapGraduated } = await import('../lib/pumpfun.js');
     const [movers, graduated] = await Promise.all([
       fetchPumpMovers(60),
@@ -153,6 +152,38 @@ app.get('/api/movers', async (req, res) => {
       enriched = await enrichMovers(sorted);
     } catch { enriched = sorted.slice(0, 30); }
     res.json({ ok: true, coins: enriched, ts: Date.now() });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e && e.message || e) });
+  }
+});
+
+// v3.30: token registry diagnostics — table status, counts, sample records.
+// Used to verify the persistent registry survives deploys.
+app.get('/api/registry', async (req, res) => {
+  try {
+    const { pool, hasDb } = await import('../db/pool.js');
+    const { registrySize } = await import('../lib/registry.js');
+    if (!hasDb) {
+      return res.json({ ok: true, db: false, cacheSize: registrySize() });
+    }
+    const tables = {};
+    for (const t of ['ab_tokens', 'ab_token_observations', 'ab_evaluations']) {
+      try {
+        const { rows } = await pool.query(`SELECT COUNT(*) AS n FROM ${t}`);
+        tables[t] = Number(rows[0].n);
+      } catch (e) {
+        tables[t] = 'missing: ' + e.message.slice(0, 80);
+      }
+    }
+    let sample = [];
+    try {
+      const { rows } = await pool.query(
+        `SELECT mint, symbol, lifecycle_state, venue, vet_count, last_seen
+         FROM ab_tokens ORDER BY updated_at DESC LIMIT 5`
+      );
+      sample = rows;
+    } catch {}
+    res.json({ ok: true, db: true, cacheSize: registrySize(), tables, sample, ts: Date.now() });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e && e.message || e) });
   }
