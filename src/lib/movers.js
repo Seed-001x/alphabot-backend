@@ -73,3 +73,11 @@ export function getMovers() {
 export function moverCount() {
   return snapshots.size;
 }
+
+// v3.32: expose raw MC history for the TA entry filter (ta.js).
+// Returns [{mc, ts}] oldest→newest, or null if insufficient history.
+export function getPriceHistory(mint) {
+  const e = snapshots.get(mint);
+  if (!e || !e.history || e.history.length < 4) return null;
+  return e.history.map(h => ({ mc: h.mc, ts: h.ts }));
+}

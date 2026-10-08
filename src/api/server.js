@@ -189,6 +189,29 @@ app.get('/api/registry', async (req, res) => {
   }
 });
 
+// v3.32: real whale wallet buy feed for the Research Center.
+// GET /api/whales — summary for the 20 tracked wallets (last buy, 24h count).
+// GET /api/whales/:address/buys — buy history detail for one wallet.
+app.get('/api/whales', async (req, res) => {  try {
+    const { getWhalesSummary } = await import('../lib/whales.js');
+    const d = await getWhalesSummary();
+    res.json({ ok: true, ...d });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e && e.message || e) });
+  }
+});
+
+app.get('/api/whales/:address/buys', async (req, res) => {  try {
+    const { getWalletBuys } = await import('../lib/whales.js');
+    const addr = String(req.params.address || '').trim();
+    if (!addr || addr.length < 32) return res.status(400).json({ ok: false, error: 'bad address' });
+    const d = await getWalletBuys(addr);
+    res.json({ ok: true, ...d });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e && e.message || e) });
+  }
+});
+
 // v3.24: dry-run the real entry path — exercises every check without spending.
 // Returns step-by-step diagnostic to verify real trading is wired correctly.
 app.get('/api/realbook/dryrun', async (req, res) => {
