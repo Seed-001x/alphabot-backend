@@ -6,7 +6,7 @@
 
 import { fetchTokens, fetchLatestProfiles, fetchLatestBoosts, tokenView } from './dexscreener.js';
 import {
-  fetchFreshPumpCoins, fetchPumpLatest, fetchPumpTop, fetchPumpMovers, fetchRugReport,
+  fetchFreshPumpCoins, fetchPumpLatest, fetchPumpTop, fetchPumpMovers, fetchPumpSwapGraduated, fetchRugReport,
   curveProgress, isOnCurve, PUMP_SUFFIX,
 } from './pumpfun.js';
 import { buildFeeds, momentumScore } from './feeds.js';
@@ -33,16 +33,18 @@ const isPumpOrigin = (address, pair) =>
 // ---------------------------------------------------------- SCAN
 export async function scanTokens() {
   probePumpPortal();
-  const [pumpLatest, pumpTop, pumpMovers, fresh, profiles, boosts] = await Promise.all([
+  const [pumpLatest, pumpTop, pumpMovers, pumpGraduated, fresh, profiles, boosts] = await Promise.all([
     fetchPumpLatest(40),
     fetchPumpTop(60),
     fetchPumpMovers(60),
+    fetchPumpSwapGraduated(40),
     fetchFreshPumpCoins(40),
     fetchLatestProfiles(60),
     fetchLatestBoosts(60),
   ]);
   // v3.23: record top-coin snapshots for movers strategy (dip/breakout detection)
   // v3.27: also record from the movers feed (mid-cap runners)
+  // v3.29: also record graduated PumpSwap coins (post-graduation runners)
   try {
     const { recordMoverSnapshot } = await import('./movers.js');
     recordMoverSnapshot(pumpTop.map(c => ({
@@ -53,12 +55,30 @@ export async function scanTokens() {
       address: c.address, symbol: c.symbol,
       mc: c.usdMc || c.usd_market_cap || 0, vol24h: c.volume_24h || 0,
     })));
+    recordMoverSnapshot(pumpGraduated.map(c => ({
+      address: c.address, symbol: c.symbol,
+      mc: c.usdMc || 0, vol24h: c.vol24h || 0,
+    })));
   } catch { /* movers is additive */ }
+  // v3.29: touch the token registry for every discovered mint so nothing
+  // disappears after one look.
+  try {
+    const { registryTouch, registryPrune } = await import('./registry.js');
+    for (const f of [...pumpLatest, ...pumpTop, ...pumpMovers, ...pumpGraduated, ...fresh]) {
+      if (f && f.address) registryTouch(f.address, f.usdMc || f.usd_market_cap || 0);
+    }
+    registryPrune();
+  } catch { /* registry is additive */ }
   const meta = new Map();
   for (const f of [...pumpLatest, ...fresh]) meta.set(f.address, f);
   for (const f of pumpTop) if (!meta.has(f.address)) meta.set(f.address, f);
   for (const f of pumpMovers) if (!meta.has(f.address)) {
     meta.set(f.address, { ...f, moverFeed: true });
+  }
+  // v3.29: graduated PumpSwap coins — tagged so the pipeline knows they're
+  // post-graduation runners, not bonding-curve launches.
+  for (const f of pumpGraduated) if (!meta.has(f.address)) {
+    meta.set(f.address, { ...f, graduatedFeed: true });
   }
   let ppMints = [];
   try { ppMints = getPumpPortalMints(); } catch { ppMints = []; }

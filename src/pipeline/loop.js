@@ -147,9 +147,17 @@ async function scanCycle() {
     // pumpApiOk re-checks every cycle (the old sticky-first-cycle flag lied
     // after a cold-start failure and showed the feed as dead forever).
     cycleStats.pumpApiOk = candidates.some(c => c.source === 'pump-api');
+    // v3.29 TOKEN REGISTRY: don't re-vet a token rejected <5 min ago, but DO
+    // re-vet if its MC moved >20% since the last vet (it might be a runner
+    // now). Replaces the blunt 90-min seenMints dedupe for scan candidates.
+    let registry = null;
+    try { registry = await import('../lib/registry.js'); } catch { /* fail-open */ }
     for (const c of candidates) {
-      if (seenMints.has(c.address)) continue;
-      seenMints.set(c.address, Date.now());
+      if (registry && !registry.registryShouldVet(c.address, c.mc)) continue;
+      if (!registry) {
+        if (seenMints.has(c.address)) continue;
+        seenMints.set(c.address, Date.now());
+      }
       Q.vet.push(c);
     }
     // v3.23: movers strategy — inject detected movers (dip/breakout/momentum)
@@ -194,6 +202,12 @@ async function scanCycle() {
         if (settled.status !== 'fulfilled') { cycleStats.errors++; continue; }
         try {
           const r = settled.value;
+          // v3.29: record the vet outcome in the token registry so the next
+          // cycle can decide whether a re-vet is worthwhile.
+          try {
+            const { registryRecordVet } = await import('../lib/registry.js');
+            registryRecordVet(t.address, r.verdict, t.mc);
+          } catch { /* registry is additive */ }
           if (r.verdict === 'KILLED') {
             cycleStats.killed++;
             logKill(t, r.killPass, r.killReason);

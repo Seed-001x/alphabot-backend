@@ -88,6 +88,57 @@ export function fetchPumpMovers(limit = 60) {
   return pfCoins({ sort: 'last_trade_timestamp', order: 'DESC', limit });
 }
 
+// v3.29 GRADUATED feed: pump.fun coins that graduated to PumpSwap.
+// The bot was blind to these — runners like Justice For Alcebiades ($300K MC)
+// live here, not on the bonding curve. GeckoTerminal pumpswap pools,
+// filtered to pump-suffix mints (pump.fun origin). Sorted by volume.
+const GT = 'https://api.geckoterminal.com/api/v2';
+export async function fetchPumpSwapGraduated(limit = 40) {
+  try {
+    const out = [];
+    for (let page = 1; page <= 2 && out.length < limit; page++) {
+      const u = `${GT}/networks/solana/dexes/pumpswap/pools?page=${page}&include=base_token`;
+      const r = await fetch(u, { headers: { 'Accept': 'application/json', 'user-agent': 'alphabot-backend/1.0' } });
+      if (!r.ok) break;
+      const d = await r.json();
+      const tokens = new Map(); // token id -> attributes
+      for (const t of (d.included || [])) {
+        if (t && t.type === 'token') tokens.set(t.id, t.attributes || {});
+      }
+      for (const p of (d.data || [])) {
+        const a = p.attributes || {};
+        const rel = (p.relationships && p.relationships.base_token && p.relationships.base_token.data) || {};
+        const mint = String(rel.id || '').replace(/^solana_/, '');
+        if (!mint || !mint.endsWith(PUMP_SUFFIX)) continue;
+        const tk = tokens.get(rel.id) || {};
+        const vol = a.volume_usd || {};
+        const pc = a.price_change_percentage || {};
+        const tx = a.transactions || {};
+        const h24 = tx.h24 || {};
+        out.push({
+          address: mint,
+          symbol: tk.symbol || String(a.name || '').split(' / ')[0] || '???',
+          name: tk.name || String(a.name || '').split(' / ')[0] || 'Unknown',
+          image: tk.image_url || null,
+          usdMc: Number(a.fdv_usd) || 0,
+          vol24h: Number(vol.h24) || 0,
+          priceChgM5: Number(pc.m5) || 0,
+          priceChgH1: Number(pc.h1) || 0,
+          priceChgH24: Number(pc.h24) || 0,
+          buysH24: h24.buys || 0,
+          sellsH24: h24.sells || 0,
+          reserveUsd: Number(a.reserve_in_usd) || 0,
+          poolCreatedAt: a.pool_created_at ? Date.parse(a.pool_created_at) : null,
+          graduated: true,
+          source: 'pumpswap',
+        });
+        if (out.length >= limit) break;
+      }
+    }
+    return out;
+  } catch { return []; }
+}
+
 // RugCheck firehose (as in the frontend desk).
 export async function fetchFreshPumpCoins(limit = 40) {
   try {

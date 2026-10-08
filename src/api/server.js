@@ -131,10 +131,20 @@ app.get('/api/realbook', async (req, res) => {
 // v3.27: live pump.fun movers feed for the frontend Opportunities tab.
 // v3.28: enriched with terminal data (holders, vol24h, priceUsd, txns24h)
 // for the top 30 by MC. Enrichment is display-only and fail-open.
+// v3.29: graduated PumpSwap runners merged in (tagged graduated: true) so
+// the tab shows the same post-graduation movers the bot now tracks.
 app.get('/api/movers', async (req, res) => {
   try {
-    const { fetchPumpMovers } = await import('../lib/pumpfun.js');
-    const coins = await fetchPumpMovers(60);
+    const { fetchPumpMovers, fetchPumpSwapGraduated } = await import('../lib/pumpfun.js');
+    const [movers, graduated] = await Promise.all([
+      fetchPumpMovers(60),
+      fetchPumpSwapGraduated(40),
+    ]);
+    const seen = new Set(movers.map(c => c.address));
+    const coins = [...movers];
+    for (const g of graduated) {
+      if (!seen.has(g.address)) { seen.add(g.address); coins.push(g); }
+    }
     // Top 30 by MC for enrichment (controls API cost)
     const sorted = [...coins].sort((a, b) => (b.usdMc || 0) - (a.usdMc || 0));
     let enriched;
