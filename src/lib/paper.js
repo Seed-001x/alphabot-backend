@@ -235,10 +235,18 @@ export function processResult(p, r, cfg, opts = {}) {
   // entry triggers real, regardless of which code path entered. Fire-and-forget,
   // never blocks paper. Fail-closed inside realEnter.
   try {
-    import('./realbook.js').then(({ isRealMode, realEnter }) => {
+    import('./realbook.js').then(({ isRealMode, realEnter, isKillSwitched }) => {
       if (isRealMode()) {
         realEnter(pos, t, finalScore, cfg).catch(e =>
           console.error('[paper] realEnter failed:', e.message));
+      } else {
+        // Visible skip reason — no more silent misses
+        import('./events.js').then(({ floorEmit }) => {
+          floorEmit('real.skip', {
+            mint: pos.mint, symbol: pos.symbol,
+            reason: isKillSwitched() ? 'kill switched' : 'realMode off in loop (flag not loaded?)',
+          });
+        }).catch(() => {});
       }
     }).catch(() => {});
   } catch { /* real hook is a nicety — paper must never break */ }
