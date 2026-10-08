@@ -157,4 +157,13 @@ export const FLOW_ADDRS = [
   'gecko1QDvtNHwqY5SjXLzuDmGDUnzu7ZEmtGHRFLr9v',
   'kapRxcwXvkdCLgbc6WuxQtkTYYovs7buJ3hbMp4Xri2',
   'tYGCfzdZTXEkG9rvbxUH8f8AgGmPRNDdMPkR1ERcCu8',
+  // User-added 2026-10-08: good copy-trade wallets that get in most movers
+  '4y2T1ghykCTq4EddoXjptZamk4qAsqcZw6eKxS8jdvE1',
+  '6DQAGJT7VZPVBsuG4kn3AvpyHCEi7B2RFFvMZdbqQqqP',
+  'GZ1yiJKTq8Mc6RiY2WQrzph8wJcizSLGgyhr4RSgnuUo',
+  'Be24Gbf5KisDk1LcWWZsBn8dvB816By7YzYF5zWZnRR6',
+  '8k1sAmVUjzaZkxqexeYkCPphjcQobYugQeGmCyvKtHNG',
+  '5YRgrP3mjGzrzirYYN5HAQH19cTYREYwGxW6XRJQUzij',
+  '9oqcX4mTVdLP7MDs7ZTL7jueW5EMjXTx7bwqy57cEuww',
+  'DtjZR9SdxUKbMyu4qeUVgjMJyGDhYg76BttXxfhf3z59',
 ];
