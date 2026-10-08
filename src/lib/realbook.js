@@ -832,7 +832,14 @@ export async function checkKillSwitch() {
   if (eq == null) return false;
   R.equity = [...(R.equity || []), { ts: Date.now(), v: eq }].slice(-2000);
   await persistSync();
-  return false;
+  // v3.33: $11 equity floor — halt if funds hit $11 so user can analyze plays
+  if (eq <= 11 && !R.killSwitched) {
+    R.killSwitched = true;
+    console.log(`[realbook] KILL SWITCH: equity $${eq.toFixed(2)} hit $11 floor — halting`);
+    await persistSync();
+    return true;
+  }
+  return !!R.killSwitched;
 }
 
 // ------------------------------------------------------------ read API
