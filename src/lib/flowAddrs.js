@@ -166,4 +166,6 @@ export const FLOW_ADDRS = [
   '5YRgrP3mjGzrzirYYN5HAQH19cTYREYwGxW6XRJQUzij',
   '9oqcX4mTVdLP7MDs7ZTL7jueW5EMjXTx7bwqy57cEuww',
   'DtjZR9SdxUKbMyu4qeUVgjMJyGDhYg76BttXxfhf3z59',
+  // User's own wallet (added 2026-10-08)
+  'BPabbM6hwqQxxfHt3rVKTN2K4NaU1jZY2GWuFj6ZCBv6',
 ];
