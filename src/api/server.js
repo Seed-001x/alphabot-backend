@@ -129,11 +129,20 @@ app.get('/api/realbook', async (req, res) => {
 });
 
 // v3.27: live pump.fun movers feed for the frontend Opportunities tab.
+// v3.28: enriched with terminal data (holders, vol24h, priceUsd, txns24h)
+// for the top 30 by MC. Enrichment is display-only and fail-open.
 app.get('/api/movers', async (req, res) => {
   try {
     const { fetchPumpMovers } = await import('../lib/pumpfun.js');
     const coins = await fetchPumpMovers(60);
-    res.json({ ok: true, coins, ts: Date.now() });
+    // Top 30 by MC for enrichment (controls API cost)
+    const sorted = [...coins].sort((a, b) => (b.usdMc || 0) - (a.usdMc || 0));
+    let enriched;
+    try {
+      const { enrichMovers } = await import('../lib/moversenrich.js');
+      enriched = await enrichMovers(sorted);
+    } catch { enriched = sorted.slice(0, 30); }
+    res.json({ ok: true, coins: enriched, ts: Date.now() });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e && e.message || e) });
   }
