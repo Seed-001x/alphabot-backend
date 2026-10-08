@@ -111,6 +111,20 @@ export async function loadRealModeFlag() {
  */
 export async function ensureRealBook() {
   if (R) return R;
+  // v3.24: try DB restore first — never create fresh if a book exists
+  if (hasDb) {
+    try {
+      const { rows } = await pool.query('SELECT state FROM ab_desk_state WHERE id = 2');
+      if (rows.length && rows[0].state && rows[0].state.version === 1) {
+        R = rows[0].state;
+        hydrated = true;
+        console.log(`[realbook] ensureRealBook restored from DB: ${(R.positions || []).length} open`);
+        return R;
+      }
+    } catch (e) {
+      console.error('[realbook] ensureRealBook restore failed:', e.message);
+    }
+  }
   const st = await realWalletState();
   let spx = 150;
   try { spx = await solPrice(); } catch {}
