@@ -11,6 +11,7 @@ import { getExitRules } from '../lib/exits.js';
 import { loadConfig } from '../lib/config.js';
 import { getJudgeStats } from '../lib/aiJudge.js';
 import { recentEvents } from '../lib/events.js';
+import { liveFeedStatus } from '../lib/livefeed.js';
 
 const PORT = Number(process.env.PORT || 3000);
 const app = express();
@@ -53,6 +54,7 @@ app.get('/health', async (req, res) => {
     cycles: cycleStats.cycles,
     lastCycleTs: cycleStats.lastCycleTs,
     mode: 'real-only', // v3.25: paper trading removed
+    livefeed: (() => { try { return liveFeedStatus(); } catch { return null; } })(),
   });
 });
 
@@ -118,7 +120,9 @@ app.get('/api/realbook', async (req, res) => {
   try {
     const { realBookSnapshot } = await import('../lib/realbook.js');
     const snap = await realBookSnapshot();
-    res.json({ ok: true, ...snap });
+    let livefeed = null;
+    try { livefeed = liveFeedStatus(); } catch {}
+    res.json({ ok: true, ...snap, livefeed });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e && e.message || e) });
   }

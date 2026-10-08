@@ -24,6 +24,7 @@ import { fetchDbcPrices } from '../lib/meteora.js';
 import { probePumpPortal, pumpPortalState } from '../lib/pumpportal.js';
 import { recentEvents, floorEmit } from '../lib/events.js';
 import { initRealBook, loadRealModeFlag, getRealBook } from '../lib/realbook.js';
+import { startLiveFeed, syncLiveFeed, liveQuote } from '../lib/livefeed.js';
 
 const VET_PER_CYCLE = 25;
 const RUG_PER_CYCLE = 8;
@@ -324,6 +325,22 @@ async function priceTick() {
       }
     } catch { /* DBC refresh is a nicety */ }
     const elite = await refreshElite();
+    // v3.25: overlay real-time WS quotes (Helius) — fresher than the poll.
+    // WS data wins only when it's recent (<25s); otherwise polling stands.
+    try {
+      syncLiveFeed();
+      const nowQ = Date.now();
+      for (const m of mints) {
+        const q = liveQuote(m);
+        if (q && q.mc > 0 && nowQ - q.ts < 25000) {
+          priceMap[m] = {
+            ...(priceMap[m] || {}),
+            price: q.price != null ? q.price : priceMap[m]?.price,
+            mc: q.mc, src: 'ws',
+          };
+        }
+      }
+    } catch {}
     // v3.25: exits evaluate + execute directly on the real book (on-chain sells).
     const closed = await tickReal(priceMap, elite.swaps, cfg);
     if (closed.length) cycleStats.exits += closed.length;
@@ -413,6 +430,11 @@ export async function startLoop() {
   // v3.25: paper portfolio removed — real book is the only ledger.
   await initRealBook();
   await loadRealModeFlag();
+  // v3.25: real-time WS price feed (Helius Developer). Fail-open — polling
+  // continues if WS drops.
+  try { startLiveFeed(); } catch (e) {
+    console.error('[loop] livefeed start failed:', e.message);
+  }
   // Safety: if realMode isn't on, the pipeline still runs (signals/vetting/
   // research) but processSignal's realEnter will skip via isRealMode().
   // Real trading requires realMode=true in tuning + REAL_WALLET_KEY env.
