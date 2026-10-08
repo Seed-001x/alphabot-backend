@@ -6,7 +6,7 @@
 
 import { fetchTokens, fetchLatestProfiles, fetchLatestBoosts, tokenView } from './dexscreener.js';
 import {
-  fetchFreshPumpCoins, fetchPumpLatest, fetchPumpTop, fetchRugReport,
+  fetchFreshPumpCoins, fetchPumpLatest, fetchPumpTop, fetchPumpMovers, fetchRugReport,
   curveProgress, isOnCurve, PUMP_SUFFIX,
 } from './pumpfun.js';
 import { buildFeeds, momentumScore } from './feeds.js';
@@ -33,9 +33,10 @@ const isPumpOrigin = (address, pair) =>
 // ---------------------------------------------------------- SCAN
 export async function scanTokens() {
   probePumpPortal();
-  const [pumpLatest, pumpTop, fresh, profiles, boosts] = await Promise.all([
+  const [pumpLatest, pumpTop, pumpMovers, fresh, profiles, boosts] = await Promise.all([
     fetchPumpLatest(40),
     fetchPumpTop(60),
+    fetchPumpMovers(60),
     fetchFreshPumpCoins(40),
     fetchLatestProfiles(60),
     fetchLatestBoosts(60),
@@ -51,6 +52,9 @@ export async function scanTokens() {
   const meta = new Map();
   for (const f of [...pumpLatest, ...fresh]) meta.set(f.address, f);
   for (const f of pumpTop) if (!meta.has(f.address)) meta.set(f.address, f);
+  for (const f of pumpMovers) if (!meta.has(f.address)) {
+    meta.set(f.address, { ...f, moverFeed: true });
+  }
   let ppMints = [];
   try { ppMints = getPumpPortalMints(); } catch { ppMints = []; }
   for (const m of ppMints) {
