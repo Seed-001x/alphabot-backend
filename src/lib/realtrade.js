@@ -112,8 +112,9 @@ export async function processSignal(r, cfg, opts = {}) {
   // v3.39 APE MODE per user ("fuck all the restriction bullshit") — ALL entry
   // gates disabled except: honeypot check, wallet balance (realbook), max positions.
   // v3.42 "0.06 → 0.2" plan per user 2026-10-09 — the universe is:
-  //   movers-tab coins + whale-wallet copy trades, $50K+ MC, locked liquidity,
+  //   movers-tab + trending-tab coins + whale-wallet copy trades, $50K+ MC, locked liquidity,
   //   no wash/bundle bot activity, no scams. Everything else stays ape.
+  // v3.43: added trending-tab per user ("trending tab has coins it could be aping").
   // 1. Dead-coin (KEEP from v3.41): fail-closed holders + MC.
   const holderCount = (t.holders != null ? t.holders : (r.dossier && r.dossier.holderCount));
   if (holderCount == null) return gate(`dead coin — no holder data (fail-closed)`);
@@ -121,8 +122,9 @@ export async function processSignal(r, cfg, opts = {}) {
   if (t.mc == null || t.mc <= 0) return gate(`dead coin — no MC data (fail-closed)`);
   // 2. MC floor $50K per user ("focus on 50k+ market caps").
   if (t.mc < 50000) return gate(`MC $${Math.round(t.mc).toLocaleString()} < $50K floor`);
-  // 3. Universe gate: movers-tab OR whale-accumulated (2+ tracked wallets, 24h).
+  // 3. Universe gate: movers-tab OR trending-tab OR whale-accumulated (2+ tracked wallets, 24h).
   const isMover = !!(t.feeds && t.feeds.includes('movers'));
+  const isTrending = !!(t.feeds && t.feeds.includes('trending'));
   let whaleWallets = 0, whaleHasData = false;
   try {
     const { whaleBuyWallets } = await import('./whales.js');
@@ -133,13 +135,13 @@ export async function processSignal(r, cfg, opts = {}) {
   if (whaleHit) {
     try { floorEmit('whale.copy', { mint: t.address, symbol: t.symbol, wallets: whaleWallets }); } catch {}
   }
-  if (!isMover && !whaleHit) {
+  if (!isMover && !isTrending && !whaleHit) {
     // Fail-open ONLY when the whale cache is completely cold (bot just started,
     // no wallet data yet) — otherwise this is a hard universe gate per user.
     if (!whaleHasData) {
-      try { floorEmit('universe.cold', { mint: t.address, symbol: t.symbol, reason: 'whale cache cold, not movers-tagged — fail-open' }); } catch {}
+      try { floorEmit('universe.cold', { mint: t.address, symbol: t.symbol, reason: 'whale cache cold, not movers/trending-tagged — fail-open' }); } catch {}
     } else {
-      return gate(`not on movers tab, no whale accumulation (${whaleWallets} wallets)`);
+      return gate(`not on movers/trending tab, no whale accumulation (${whaleWallets} wallets)`);
     }
   }
   // 4. Locked liquidity per user ("only pump fun coins with locked liquidity").
