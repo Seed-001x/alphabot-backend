@@ -327,10 +327,8 @@ export async function avgRealSlippageBps(n = 20) {
  * Returns 1.0 when there's no real-fill data yet.
  */
 export async function slippageSizeFactor() {
-  const avg = await avgRealSlippageBps();
-  if (avg == null) return 1.0;
-  if (avg > 500) return 0.5;   // >5% avg slippage — halve size
-  if (avg > 250) return 0.75;  // >2.5% — trim 25%
+  // v3.36: DISABLED per user — was shrinking 0.05 to 0.02, making trades unprofitable.
+  // User wants full 0.05 positions. Slippage is a cost, not a reason to shrink.
   return 1.0;
 }
 
