@@ -66,14 +66,14 @@ export function thinkEntry(t, cfg, bankrollUsd) {
   const buyPressure = t.buyPressure || 50;
 
   if (score >= 80 && buyPressure >= 70) {
-    tp = Math.max(tp, 1.5); // 150% — strong coin, strong demand
-    reasoning.push(`elite setup (score ${score}, BP ${buyPressure}) — TP widened to 150%`);
+    tp = Math.max(tp, 2.0); // 200% — strong coin, strong demand (was 150%)
+    reasoning.push(`elite setup (score ${score}, BP ${buyPressure}) — TP widened to 200%`);
   } else if (score >= 70) {
-    tp = Math.max(tp, 1.0); // 100%
-    reasoning.push(`solid setup — TP at 100%`);
+    tp = Math.max(tp, 1.5); // 150% (was 100%)
+    reasoning.push(`solid setup — TP at 150%`);
   } else {
-    tp = Math.min(tp, 0.5); // 50% — weaker coin, take what you can get
-    reasoning.push(`weaker setup (score ${score}) — TP tightened to 50%`);
+    tp = Math.max(tp, 1.0); // 100% — hold for 2x minimum, no more 20% scalps (was 50%)
+    reasoning.push(`holding for 2x minimum — no scalps`);
   }
 
   // Volatility adjustment: wild coins need wider TP to be worth the risk
@@ -83,7 +83,7 @@ export function thinkEntry(t, cfg, bankrollUsd) {
     reasoning.push(`high volatility (${vol5m.toFixed(0)}%/5m) — TP widened for the risk`);
   }
 
-  tp = clamp(tp, 0.3, 3.0); // 30% min, 300% max
+  tp = clamp(tp, 1.0, 5.0); // 100% min (2x), 500% max — no more 20-30% scalps
   tp = Math.round(tp * 100) / 100;
 
   // --- SL: how much noise before the thesis is wrong? ---
