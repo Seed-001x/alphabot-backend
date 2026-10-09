@@ -115,10 +115,10 @@ export async function processSignal(r, cfg, opts = {}) {
   //   movers-tab + trending-tab coins + whale-wallet copy trades, $50K+ MC, locked liquidity,
   //   no wash/bundle bot activity, no scams. Everything else stays ape.
   // v3.43: added trending-tab per user ("trending tab has coins it could be aping").
-  // 1. Dead-coin (KEEP from v3.41): fail-closed holders + MC.
+  // 1. Dead-coin (v3.44): holder check fail-OPEN (was fail-closed, blocked everything).
+  // $50K MC floor is the real filter now. Only block if holders confirmed < 50.
   const holderCount = (t.holders != null ? t.holders : (r.dossier && r.dossier.holderCount));
-  if (holderCount == null) return gate(`dead coin — no holder data (fail-closed)`);
-  if (holderCount < 50) return gate(`dead coin — ${holderCount} holders (< 50)`);
+  if (holderCount != null && holderCount < 50) return gate(`dead coin — ${holderCount} holders (< 50)`);
   if (t.mc == null || t.mc <= 0) return gate(`dead coin — no MC data (fail-closed)`);
   // 2. MC floor $50K per user ("focus on 50k+ market caps").
   if (t.mc < 50000) return gate(`MC $${Math.round(t.mc).toLocaleString()} < $50K floor`);
