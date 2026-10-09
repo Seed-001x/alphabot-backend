@@ -452,10 +452,9 @@ app.use((err, req, res, _next) => {
   res.status(500).json({ ok: false, error: 'internal' });
 });
 
-app.use((req, res) => res.status(404).json({ ok: false, error: 'not_found' }));
-
 // v3.37: live config verification — exposes critical trading params so we can
 // verify what's ACTUALLY running, not just what was committed.
+// NOTE: must be registered BEFORE the 404 catch-all below.
 app.get('/api/live-config', async (req, res) => {
   try {
     const { cfg } = await import('../lib/config.js');
@@ -473,6 +472,8 @@ app.get('/api/live-config', async (req, res) => {
     res.status(500).json({ ok: false, error: String(e.message) });
   }
 });
+
+app.use((req, res) => res.status(404).json({ ok: false, error: 'not_found' }));
 
 // ---------------------------------------------------------------- boot
 startLoop()
