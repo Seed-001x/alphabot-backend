@@ -93,7 +93,7 @@ export async function processSignal(r, cfg, opts = {}) {
     adapted: !!r.adapted,
     eliteHit: !!r.eliteHit,
     flowTag: !!r.flowTag,
-    entryMc: t.mc,
+    entryMc: mc,
     // (v3.25 fix: these crashed paper.js when set before declaration)
     ...(moverBonus > 0 ? { moverBonus: `${t.moverSetup} +${moverBonus}` } : {}),
     ...(m5pen > 0 ? { m5Penalty: m5pen } : {}),
@@ -117,12 +117,14 @@ export async function processSignal(r, cfg, opts = {}) {
   //   no wash/bundle bot activity, no scams. Everything else stays ape.
   // v3.43: added trending-tab per user ("trending tab has coins it could be aping").
   // 1. Dead-coin (v3.44): holder check fail-OPEN (was fail-closed, blocked everything).
-  // $50K MC floor is the real filter now. Only block if holders confirmed < 50.
+  // $20K MC floor is the real filter now. Only block if holders confirmed < 50.
+  // v3.47: check usdMc too — movers feed uses usdMc, not mc.
+  const mc = t.mc ?? t.usdMc;
   const holderCount = (t.holders != null ? t.holders : (r.dossier && r.dossier.holderCount));
   if (holderCount != null && holderCount < 50) return gate(`dead coin — ${holderCount} holders (< 50)`);
-  if (t.mc == null || t.mc <= 0) return gate(`dead coin — no MC data (fail-closed)`);
-  // 2. MC floor $50K per user ("focus on 50k+ market caps").
-  if (t.mc < 20000) return gate(`MC $${Math.round(t.mc).toLocaleString()} < $20K floor`);
+  if (mc == null || mc <= 0) return gate(`dead coin — no MC data (fail-closed)`);
+  // 2. MC floor $20K per user.
+  if (mc < 20000) return gate(`MC $${Math.round(mc).toLocaleString()} < $20K floor`);
   // 3. Universe gate: movers-tab OR trending-tab OR whale-accumulated (2+ tracked wallets, 24h).
   const isMover = !!(t.feeds && t.feeds.includes('movers'));
   const isTrending = !!(t.feeds && t.feeds.includes('trending'));
@@ -165,7 +167,7 @@ export async function processSignal(r, cfg, opts = {}) {
       // "dormant coin wakes up" class of runner. Unknown lock → require real
       // pool depth instead: >= $10k liquidity AND >= 3% of market cap.
       const liq = t.liquidity || 0;
-      const depth = t.mc > 0 ? liq / t.mc : 0;
+      const depth = mc > 0 ? liq / mc : 0;
       if (!(liq >= 10000 && depth >= 0.03))
         return gate(`graduated, LP lock unknown and pool too thin (${fmtUsd(liq)} liq = ${(depth * 100).toFixed(1)}% of MC)`);
     } else if (lp < 80) {
