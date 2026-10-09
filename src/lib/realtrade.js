@@ -129,6 +129,21 @@ export async function processSignal(r, cfg, opts = {}) {
       registryAttachTa(t.address, taCheck);
     } catch { /* registry is additive */ }
   }
+  // Wash-trade filter: bots making tiny identical buys (~0.02 SOL) fake volume
+  // and "activity"; the MM then dumps to zero (X Coin pattern — unexitable).
+  // Reject with -20 score penalty for the record. Fail-open: Helius error or
+  // insufficient tx data = skip. Runs only on tokens that passed the score bar
+  // (saves Helius credits); results cached 5 min per mint.
+  let washCheck = null, washAdj = 0;
+  try {
+    const { checkBuyDistribution } = await import('./washtrade.js');
+    washCheck = await checkBuyDistribution(t.address);
+    if (washCheck.isWashTrade) washAdj = -20;
+  } catch { /* fail-open: no wash data = no adjustment */ }
+  if (washCheck && washCheck.isWashTrade) {
+    try { floorEmit('wash.reject', { mint: t.address, symbol: t.symbol, reason: washCheck.reason, stats: washCheck.stats }); } catch {}
+    return gate(`wash trading: ${washCheck.reason} (score ${Math.max(0, finalScore + washAdj)})`);
+  }
   if (openPositions.length >= cfg.maxPositions) return gate(`max ${cfg.maxPositions} positions open`);
   if (openPositions.some(x => x.mint === t.address)) return gate(`already holding ${t.symbol}`);
   const cd = (R && R.cooldowns || {})[t.address];
