@@ -454,6 +454,26 @@ app.use((err, req, res, _next) => {
 
 app.use((req, res) => res.status(404).json({ ok: false, error: 'not_found' }));
 
+// v3.37: live config verification — exposes critical trading params so we can
+// verify what's ACTUALLY running, not just what was committed.
+app.get('/api/live-config', async (req, res) => {
+  try {
+    const { cfg } = await import('../lib/config.js');
+    res.json({
+      ok: true,
+      ts: Date.now(),
+      sizes: { base: cfg.solSizeBase, mid: cfg.solSizeMid, top: cfg.solSizeTop, flat: 0.05 },
+      fees: { priority: cfg.priorityFeeLamports, jitoTip: cfg.jitoTipLamports },
+      sl: { min: 0.10, max: 0.40 },
+      tp: { min: 1.0, max: 5.0 },
+      killSwitch: cfg.killSwitchEquity || 11,
+      maxPositions: cfg.maxPositions,
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message) });
+  }
+});
+
 // ---------------------------------------------------------------- boot
 startLoop()
   .then(() => {
