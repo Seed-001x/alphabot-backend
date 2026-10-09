@@ -176,8 +176,7 @@ export async function processSignal(r, cfg, opts = {}) {
   }
   // 5. Scam checks: rugged flag + bundled supply (dev-split wallets).
   if (dossier && dossier.rugged === true) return gate(`RugCheck flags RUGGED`);
-  if (dossier && dossier.bundleScore != null && dossier.bundleScore >= 60)
-    return gate(`bundled supply — bundleScore ${dossier.bundleScore} (dev-split wallets)`);
+  // Bundle check DISABLED per user 2026-10-09 — was flagging 100% of coins (all score 100).
   // 6. Bot activity / wash trading per user ("check for bot activity and bundle volume").
   try {
     const { checkBuyDistribution } = await import('./washtrade.js');
