@@ -468,7 +468,7 @@ app.get('/api/live-config', async (req, res) => {
       tp: { min: 1.0, max: 5.0, note: 'freethinker.js clamp, 2x minimum' },
       killSwitchEquity: null,
       killSwitchNote: 'permanently disabled per user 2026-10-09 (v3.40)',
-      universe: { mcFloor: 50000, moversOrWhale: true, lpLock: true, washCheck: true, note: 'v3.42: movers tab + whale copy-trades, $50K+ MC, locked LP, no wash/bundle' },
+      universe: { mcFloor: 50000, moversOrWhale: true, lpLock: true, washCheck: true, note: 'v3.43: movers + trending tabs + whale copy-trades, $50K+ MC, locked LP, no wash/bundle' },
       maxPositions: c.maxPositions,
     });
   } catch (e) {
