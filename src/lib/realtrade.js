@@ -144,6 +144,25 @@ export async function processSignal(r, cfg, opts = {}) {
     try { floorEmit('wash.reject', { mint: t.address, symbol: t.symbol, reason: washCheck.reason, stats: washCheck.stats }); } catch {}
     return gate(`wash trading: ${washCheck.reason} (score ${Math.max(0, finalScore + washAdj)})`);
   }
+  // v3.37: snipe-and-farm fake pattern — dev snipes own launch (one vertical
+  // candle to ~$400K), then farms sideways with a volume bot (tiny identical
+  // 0.01/0.02 buys from ~5 wallets) to trick bots into aping, then rugs to
+  // zero. User has seen this exact pattern 3-4x. Chart gate first (free), tx
+  // confirmation only on a chart match. High confidence = HARD REJECT with
+  // -25 score penalty; medium = flag event only. Fail-open.
+  let fakeCheck = null, fakeAdj = 0;
+  try {
+    const { detectSnipeAndFarm } = await import('./fakepattern.js');
+    fakeCheck = await detectSnipeAndFarm(t.address);
+    if (fakeCheck.isFake && fakeCheck.confidence === 'high') fakeAdj = -25;
+  } catch { /* fail-open: no pattern data = no adjustment */ }
+  if (fakeCheck && fakeCheck.isFake && fakeCheck.confidence === 'high') {
+    try { floorEmit('fakepattern.reject', { mint: t.address, symbol: t.symbol, reason: fakeCheck.reason, confidence: fakeCheck.confidence }); } catch {}
+    return gate(`snipe-and-farm fake pattern: ${fakeCheck.reason} (score ${Math.max(0, finalScore + fakeAdj)})`);
+  }
+  if (fakeCheck && fakeCheck.isFake) {
+    try { floorEmit('fakepattern.flag', { mint: t.address, symbol: t.symbol, reason: fakeCheck.reason, confidence: fakeCheck.confidence }); } catch {}
+  }
   if (openPositions.length >= cfg.maxPositions) return gate(`max ${cfg.maxPositions} positions open`);
   if (openPositions.some(x => x.mint === t.address)) return gate(`already holding ${t.symbol}`);
   const cd = (R && R.cooldowns || {})[t.address];
