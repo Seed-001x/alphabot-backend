@@ -892,19 +892,14 @@ export async function realEquityUsd() {
  * Still records equity history every tick, but never halts trading.
  */
 export async function checkKillSwitch() {
+  // v3.40: KILL SWITCH PERMANENTLY DISABLED per user ("no fucking kill switches").
+  // Only records equity history, never halts. Bot trades until wallet is empty.
   if (!R) return false;
   const eq = await realEquityUsd();
   if (eq == null) return false;
   R.equity = [...(R.equity || []), { ts: Date.now(), v: eq }].slice(-2000);
   await persistSync();
-  // v3.33: $11 equity floor — halt if funds hit $11 so user can analyze plays
-  if (eq <= 11 && !R.killSwitched) {
-    R.killSwitched = true;
-    console.log(`[realbook] KILL SWITCH: equity $${eq.toFixed(2)} hit $11 floor — halting`);
-    await persistSync();
-    return true;
-  }
-  return !!R.killSwitched;
+  return false;
 }
 
 // ------------------------------------------------------------ read API
