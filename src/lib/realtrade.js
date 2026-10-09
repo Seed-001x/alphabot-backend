@@ -111,6 +111,11 @@ export async function processSignal(r, cfg, opts = {}) {
 
   // v3.39 APE MODE per user ("fuck all the restriction bullshit") — ALL entry
   // gates disabled except: honeypot check, wallet balance (realbook), max positions.
+  // v3.41 MINIMAL dead-coin gates per user ("don't buy dead shit" — BotPfp had
+  // 3 holders / $3.3K MC and got bought). These are the ONLY filters back.
+  const holderCount = (t.holders != null ? t.holders : (r.dossier && r.dossier.holderCount));
+  if (holderCount != null && holderCount < 50) return gate(`dead coin — ${holderCount} holders (< 50)`);
+  if (t.mc != null && t.mc > 0 && t.mc < 10000) return gate(`dead coin — $${Math.round(t.mc)} MC (< $10K)`);
   // if (STABLE_MINTS.has(t.address)) return gate('stablecoin excluded');
   // if (!(finalScore >= cfg.minTokenScore)) return gate(`score ${finalScore} < ${cfg.minTokenScore} bar`);
   // v3.32 TA resistance gate — DISABLED v3.39 (ape mode). Was a hard skip on
