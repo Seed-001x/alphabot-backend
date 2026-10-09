@@ -92,19 +92,19 @@ export function thinkEntry(t, cfg, bankrollUsd) {
   let sl = cfg.stopLoss; // start from learned base
 
   if (score >= 80) {
-    sl = Math.min(sl, 0.12); // 12% — high conviction, still some room (was 8%)
-    reasoning.push(`high conviction — SL at 12% (dump-only)`);
+    sl = Math.min(sl, 0.15); // 15% — high conviction, some room (was 12%)
+    reasoning.push(`high conviction — SL at 15%`);
   } else if (score < 60) {
-    sl = Math.max(sl, 0.20); // 20% — low conviction, wide berth (was 15%)
-    reasoning.push(`low conviction — SL widened to 20%`);
+    sl = Math.max(sl, 0.40); // 40% — low conviction, max room per user
+    reasoning.push(`low conviction — SL widened to 40%`);
   }
 
   if (vol5m > 20) {
-    sl = Math.max(sl, 0.20); // volatile coins need room — don't shake out on noise
-    reasoning.push(`volatile — SL widened to 20% to avoid shakeout`);
+    sl = Math.max(sl, 0.40); // volatile coins need max room — don't shake out on noise
+    reasoning.push(`volatile — SL widened to 40% to avoid shakeout`);
   }
 
-  sl = clamp(sl, 0.10, 0.30); // 10% min, 30% max (was 5%/25%)
+  sl = clamp(sl, 0.10, 0.40); // 10% min, 40% max per user (was 30%)
   sl = Math.round(sl * 1000) / 1000;
 
   return { tp, sl, solSize, sizePct, sizeUsd, reasoning };

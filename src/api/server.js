@@ -190,8 +190,12 @@ app.get('/api/registry', async (req, res) => {
 });
 
 // v3.32: real whale wallet buy feed for the Research Center.
-// GET /api/whales — summary for the 20 tracked wallets (last buy, 24h count).
+// GET /api/whales — summary for ALL tracked wallets (last buy, 24h count).
+//   Tiered: user's 10 priority wallets refresh every 120s; remaining 156
+//   rotate 20 per cycle (full rotation ≈ 16 min).
 // GET /api/whales/:address/buys — buy history detail for one wallet.
+// POST /api/research/synthesize — accumulation signals: tokens bought by
+//   2+ distinct tracked wallets in the last 24h. Read-only, never trades.
 app.get('/api/whales', async (req, res) => {  try {
     const { getWhalesSummary } = await import('../lib/whales.js');
     const d = await getWhalesSummary();
@@ -206,6 +210,16 @@ app.get('/api/whales/:address/buys', async (req, res) => {  try {
     const addr = String(req.params.address || '').trim();
     if (!addr || addr.length < 32) return res.status(400).json({ ok: false, error: 'bad address' });
     const d = await getWalletBuys(addr);
+    res.json({ ok: true, ...d });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e && e.message || e) });
+  }
+});
+
+// POST /api/research/synthesize — whale accumulation signals (read-only).
+app.post('/api/research/synthesize', async (req, res) => {  try {
+    const { synthesizeResearch } = await import('../lib/whales.js');
+    const d = await synthesizeResearch();
     res.json({ ok: true, ...d });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e && e.message || e) });
