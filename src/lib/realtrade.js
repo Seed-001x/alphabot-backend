@@ -93,7 +93,7 @@ export async function processSignal(r, cfg, opts = {}) {
     adapted: !!r.adapted,
     eliteHit: !!r.eliteHit,
     flowTag: !!r.flowTag,
-    entryMc: mc,
+    entryMc: (t.mc ?? t.usdMc),
     // (v3.25 fix: these crashed paper.js when set before declaration)
     ...(moverBonus > 0 ? { moverBonus: `${t.moverSetup} +${moverBonus}` } : {}),
     ...(m5pen > 0 ? { m5Penalty: m5pen } : {}),
