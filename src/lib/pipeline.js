@@ -171,7 +171,18 @@ export async function scanTokens() {
       turnover,
     });
   }
-  candidates.sort((a, b) => b.turnover - a.turnover);
+  // v3.45: vet movers/trending FIRST. User: "do I have to share my screen
+  // so he can see the Pumpfun movers I see" — the bot was burying movers
+  // under high-turnover tiny coins. Movers/trending/whale tags sort first,
+  // then turnover within each tier.
+  const feedRank = (c) => {
+    const f = c.feeds || [];
+    if (f.includes('movers')) return 3;
+    if (f.includes('trending')) return 2;
+    if (c.moverFeed || c.graduatedFeed) return 1;
+    return 0;
+  };
+  candidates.sort((a, b) => (feedRank(b) - feedRank(a)) || (b.turnover - a.turnover));
   return { candidates, discovered: batch.length, feedRows: rows };
 }
 
