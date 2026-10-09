@@ -37,6 +37,31 @@ export function taEntryCheck(mint, currentMc) {
     return { decision: 'skip', reason: 'flat price history', adjustment: 0 };
   }
 
+  // --- Parabolic: don't chase vertical spikes (TRALA, TikTok pattern) ---
+  // If price has more than doubled from the swing low with no meaningful
+  // pullback, it's an unsustainable vertical move — don't buy the top.
+  const runUp = (currentMc - swingLow) / swingLow;
+  if (runUp > 1.0) {
+    // Check for pullback: has it dipped >15% from any interim high?
+    let maxDip = 0;
+    let peak = mcs[0];
+    for (const mc of mcs) {
+      if (mc > peak) peak = mc;
+      const dip = (peak - mc) / peak;
+      if (dip > maxDip) maxDip = dip;
+    }
+    if (maxDip < 0.15) {
+      return {
+        decision: 'reject',
+        reason: `parabolic move — +${Math.round(runUp * 100)}% from low with no pullback (unsustainable)`,
+        adjustment: RESISTANCE_PENALTY,
+        swingHigh: Math.round(swingHigh),
+        swingLow: Math.round(swingLow),
+        historyPoints: mcs.length,
+      };
+    }
+  }
+
   // --- Resistance: don't buy into the ceiling ---
   // Current MC within 3% below the recent swing high = buying the top.
   const distFromHigh = (swingHigh - currentMc) / swingHigh;
