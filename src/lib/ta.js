@@ -37,35 +37,35 @@ export function taEntryCheck(mint, currentMc) {
     return { decision: 'skip', reason: 'flat price history', adjustment: 0 };
   }
 
-  // --- High-launch reject: don't buy coins that spawned at 300K+ ---
+  // --- High-launch reject: DISABLED v3.38 (was blocking too much — bot paralyzed, 0 trades)
   // If the earliest observed MC is already 250K+, there was no 10-20K entry.
   // These are late-stage launches with no edge — skip them.
-  const launchMc = mcs[0];
-  if (launchMc >= 250000) {
-    return {
-      decision: 'reject',
-      reason: `high launch — spawned at $${Math.round(launchMc)} (no early entry)`,
-      adjustment: RESISTANCE_PENALTY,
-      swingHigh: Math.round(swingHigh),
-      swingLow: Math.round(swingLow),
-      historyPoints: mcs.length,
-    };
-  }
+  // const launchMc = mcs[0];
+  // if (launchMc >= 250000) {
+  //   return {
+  //     decision: 'reject',
+  //     reason: `high launch — spawned at $${Math.round(launchMc)} (no early entry)`,
+  //     adjustment: RESISTANCE_PENALTY,
+  //     swingHigh: Math.round(swingHigh),
+  //     swingLow: Math.round(swingLow),
+  //     historyPoints: mcs.length,
+  //   };
+  // }
 
-  // --- Dead-dip reject: don't catch falling knives (X Coin pattern) ---
+  // --- Dead-dip reject: DISABLED v3.38 (was blocking too much — bot paralyzed, 0 trades)
   // If the coin already pumped to a high then dumped 70%+, the "dip" is a
   // dead coin, not a bounce. Don't buy after a massive rug.
-  const dumpFromHigh = (swingHigh - currentMc) / swingHigh;
-  if (dumpFromHigh >= 0.70 && swingHigh >= 200000) {
-    return {
-      decision: 'reject',
-      reason: `dead dip — pumped to $${Math.round(swingHigh)} then dumped ${Math.round(dumpFromHigh * 100)}% (falling knife)`,
-      adjustment: RESISTANCE_PENALTY,
-      swingHigh: Math.round(swingHigh),
-      swingLow: Math.round(swingLow),
-      historyPoints: mcs.length,
-    };
-  }
+  // const dumpFromHigh = (swingHigh - currentMc) / swingHigh;
+  // if (dumpFromHigh >= 0.70 && swingHigh >= 200000) {
+  //   return {
+  //     decision: 'reject',
+  //     reason: `dead dip — pumped to $${Math.round(swingHigh)} then dumped ${Math.round(dumpFromHigh * 100)}% (falling knife)`,
+  //     adjustment: RESISTANCE_PENALTY,
+  //     swingHigh: Math.round(swingHigh),
+  //     swingLow: Math.round(swingLow),
+  //     historyPoints: mcs.length,
+  //   };
+  // }
 
   // --- Resistance: don't buy into the ceiling ---
   // Current MC within 3% below the recent swing high = buying the top.

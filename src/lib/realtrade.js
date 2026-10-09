@@ -129,40 +129,36 @@ export async function processSignal(r, cfg, opts = {}) {
       registryAttachTa(t.address, taCheck);
     } catch { /* registry is additive */ }
   }
-  // Wash-trade filter: bots making tiny identical buys (~0.02 SOL) fake volume
-  // and "activity"; the MM then dumps to zero (X Coin pattern — unexitable).
-  // Reject with -20 score penalty for the record. Fail-open: Helius error or
-  // insufficient tx data = skip. Runs only on tokens that passed the score bar
-  // (saves Helius credits); results cached 5 min per mint.
-  let washCheck = null, washAdj = 0;
-  try {
-    const { checkBuyDistribution } = await import('./washtrade.js');
-    washCheck = await checkBuyDistribution(t.address);
-    if (washCheck.isWashTrade) washAdj = -20;
-  } catch { /* fail-open: no wash data = no adjustment */ }
-  if (washCheck && washCheck.isWashTrade) {
-    try { floorEmit('wash.reject', { mint: t.address, symbol: t.symbol, reason: washCheck.reason, stats: washCheck.stats }); } catch {}
-    return gate(`wash trading: ${washCheck.reason} (score ${Math.max(0, finalScore + washAdj)})`);
-  }
-  // v3.37: snipe-and-farm fake pattern — dev snipes own launch (one vertical
-  // candle to ~$400K), then farms sideways with a volume bot (tiny identical
-  // 0.01/0.02 buys from ~5 wallets) to trick bots into aping, then rugs to
-  // zero. User has seen this exact pattern 3-4x. Chart gate first (free), tx
-  // confirmation only on a chart match. High confidence = HARD REJECT with
-  // -25 score penalty; medium = flag event only. Fail-open.
-  let fakeCheck = null, fakeAdj = 0;
-  try {
-    const { detectSnipeAndFarm } = await import('./fakepattern.js');
-    fakeCheck = await detectSnipeAndFarm(t.address);
-    if (fakeCheck.isFake && fakeCheck.confidence === 'high') fakeAdj = -25;
-  } catch { /* fail-open: no pattern data = no adjustment */ }
-  if (fakeCheck && fakeCheck.isFake && fakeCheck.confidence === 'high') {
-    try { floorEmit('fakepattern.reject', { mint: t.address, symbol: t.symbol, reason: fakeCheck.reason, confidence: fakeCheck.confidence }); } catch {}
-    return gate(`snipe-and-farm fake pattern: ${fakeCheck.reason} (score ${Math.max(0, finalScore + fakeAdj)})`);
-  }
-  if (fakeCheck && fakeCheck.isFake) {
-    try { floorEmit('fakepattern.flag', { mint: t.address, symbol: t.symbol, reason: fakeCheck.reason, confidence: fakeCheck.confidence }); } catch {}
-  }
+  // Wash-trade filter: DISABLED v3.38 (was blocking too much — bot paralyzed, 0 trades)
+  // Bots making tiny identical buys (~0.02 SOL) fake volume and "activity";
+  // the MM then dumps to zero (X Coin pattern — unexitable).
+  // let washCheck = null, washAdj = 0;
+  // try {
+  //   const { checkBuyDistribution } = await import('./washtrade.js');
+  //   washCheck = await checkBuyDistribution(t.address);
+  //   if (washCheck.isWashTrade) washAdj = -20;
+  // } catch { /* fail-open: no wash data = no adjustment */ }
+  // if (washCheck && washCheck.isWashTrade) {
+  //   try { floorEmit('wash.reject', { mint: t.address, symbol: t.symbol, reason: washCheck.reason, stats: washCheck.stats }); } catch {}
+  //   return gate(`wash trading: ${washCheck.reason} (score ${Math.max(0, finalScore + washAdj)})`);
+  // }
+  // v3.37: snipe-and-farm fake pattern: DISABLED v3.38 (was blocking too much)
+  // dev snipes own launch (one vertical candle to ~$400K), then farms sideways
+  // with a volume bot (tiny identical 0.01/0.02 buys from ~5 wallets) to trick
+  // bots into aping, then rugs to zero. User has seen this exact pattern 3-4x.
+  // let fakeCheck = null, fakeAdj = 0;
+  // try {
+  //   const { detectSnipeAndFarm } = await import('./fakepattern.js');
+  //   fakeCheck = await detectSnipeAndFarm(t.address);
+  //   if (fakeCheck.isFake && fakeCheck.confidence === 'high') fakeAdj = -25;
+  // } catch { /* fail-open: no pattern data = no adjustment */ }
+  // if (fakeCheck && fakeCheck.isFake && fakeCheck.confidence === 'high') {
+  //   try { floorEmit('fakepattern.reject', { mint: t.address, symbol: t.symbol, reason: fakeCheck.reason, confidence: fakeCheck.confidence }); } catch {}
+  //   return gate(`snipe-and-farm fake pattern: ${fakeCheck.reason} (score ${Math.max(0, finalScore + fakeAdj)})`);
+  // }
+  // if (fakeCheck && fakeCheck.isFake) {
+  //   try { floorEmit('fakepattern.flag', { mint: t.address, symbol: t.symbol, reason: fakeCheck.reason, confidence: fakeCheck.confidence }); } catch {}
+  // }
   if (openPositions.length >= cfg.maxPositions) return gate(`max ${cfg.maxPositions} positions open`);
   if (openPositions.some(x => x.mint === t.address)) return gate(`already holding ${t.symbol}`);
   const cd = (R && R.cooldowns || {})[t.address];
@@ -187,7 +183,8 @@ export async function processSignal(r, cfg, opts = {}) {
     const thinkToken = { ...t, score: finalScore, buyPressure: (r.breakdown && r.breakdown.buyPressure) || null };
     const adaptive = thinkEntry(thinkToken, cfg, walletUsd);
     adaptiveReasoning = adaptive.reasoning || [];
-    solSize = adaptive.solSize;
+    // v3.38: FLAT 0.05 — do NOT let thinker override size (was undoing flat sizing)
+    // adaptive.solSize intentionally ignored per user: "push it with 0.05"
     adaptiveTp = adaptive.tp;
     adaptiveSl = adaptive.sl;
   } catch { /* thinker failed → use standard sizing */ }
