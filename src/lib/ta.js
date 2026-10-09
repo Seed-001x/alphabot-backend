@@ -37,29 +37,19 @@ export function taEntryCheck(mint, currentMc) {
     return { decision: 'skip', reason: 'flat price history', adjustment: 0 };
   }
 
-  // --- Parabolic: don't chase vertical spikes (TRALA, TikTok pattern) ---
-  // If price has more than doubled from the swing low with no meaningful
-  // pullback, it's an unsustainable vertical move — don't buy the top.
-  const runUp = (currentMc - swingLow) / swingLow;
-  if (runUp > 1.0) {
-    // Check for pullback: has it dipped >15% from any interim high?
-    let maxDip = 0;
-    let peak = mcs[0];
-    for (const mc of mcs) {
-      if (mc > peak) peak = mc;
-      const dip = (peak - mc) / peak;
-      if (dip > maxDip) maxDip = dip;
-    }
-    if (maxDip < 0.15) {
-      return {
-        decision: 'reject',
-        reason: `parabolic move — +${Math.round(runUp * 100)}% from low with no pullback (unsustainable)`,
-        adjustment: RESISTANCE_PENALTY,
-        swingHigh: Math.round(swingHigh),
-        swingLow: Math.round(swingLow),
-        historyPoints: mcs.length,
-      };
-    }
+  // --- High-launch reject: don't buy coins that spawned at 300K+ ---
+  // If the earliest observed MC is already 250K+, there was no 10-20K entry.
+  // These are late-stage launches with no edge — skip them.
+  const launchMc = mcs[0];
+  if (launchMc >= 250000) {
+    return {
+      decision: 'reject',
+      reason: `high launch — spawned at $${Math.round(launchMc)} (no early entry)`,
+      adjustment: RESISTANCE_PENALTY,
+      swingHigh: Math.round(swingHigh),
+      swingLow: Math.round(swingLow),
+      historyPoints: mcs.length,
+    };
   }
 
   // --- Resistance: don't buy into the ceiling ---
