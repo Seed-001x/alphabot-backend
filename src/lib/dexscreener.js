@@ -7,14 +7,15 @@ const API = 'https://api.dexscreener.com';
 const tokenCache = new Map(); // mint -> { pair, ts }
 const CACHE_TTL = 60000;
 
-export async function fetchTokens(mints) {
+export async function fetchTokens(mints, opts = {}) {
   const out = {};
   const uniq = [...new Set(mints)].filter(Boolean);
   const now = Date.now();
   const fresh = [];
   for (const m of uniq) {
     const c = tokenCache.get(m);
-    if (c && now - c.ts < CACHE_TTL && c.pair) { out[m] = c.pair; }
+    // opts.fresh (v3.46): bypass the 60s cache — the hot tick needs live numbers.
+    if (!opts.fresh && c && now - c.ts < CACHE_TTL && c.pair) { out[m] = c.pair; }
     else fresh.push(m);
   }
   for (let i = 0; i < fresh.length; i += 30) {

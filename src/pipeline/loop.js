@@ -233,9 +233,14 @@ async function scanCycle() {
     let judged = 0;
     for (const item of Q.research.drain(RESEARCH_PER_CYCLE)) {
       try {
-        const research = await researchToken(item, item.dossier, cfg);
+        // v3.46: 'pop' movers are time-critical — research (web scraping) and the
+        // AI judge add seconds-to-tens-of-seconds while the move is happening.
+        const isPop = item.moverSetup === 'pop';
+        const research = isPop
+          ? { modifier: 0, line: null, calloutLine: null }
+          : await researchToken(item, item.dossier, cfg);
         let judgeMod = 0, judgeLine = null;
-        if (judged < JUDGE_PER_CYCLE) {
+        if (!isPop && judged < JUDGE_PER_CYCLE) {
           const j = await judgeToken(item, item.dossier, research);
           judgeMod = j.modifier; judgeLine = j.line;
           if (j.verdict) judged++;
@@ -273,6 +278,58 @@ async function scanCycle() {
   } catch (e) {
     cycleStats.errors++;
     console.error('[loop] scan cycle failed:', e.message);
+  }
+}
+
+// v3.46 HOT TICK — every 10s, re-poll the watchlist (bypassing the 60s cache),
+// feed the mover store, and act on any 'pop' immediately instead of waiting for
+// the 30s scan → vet queue → research queue chain. A coin that goes flat →
+// vertical inside ~3 minutes is over before that chain finishes.
+const popHandled = new Map(); // mint -> ts
+let hotBusy = false;
+const POP_COOLDOWN_MS = 10 * 60 * 1000;
+async function hotTick() {
+  if (hotBusy || !cfg) return;
+  hotBusy = true;
+  try {
+    const { getWatchlist, recordMoverSnapshot, getMovers } = await import('../lib/movers.js');
+    const { tokenView } = await import('../lib/dexscreener.js');
+    const mints = getWatchlist(80);
+    if (!mints.length) return;
+    const raw = await fetchTokens(mints, { fresh: true });
+    const views = [];
+    for (const m of mints) { const v = tokenView(raw[m]); if (v && v.mc) views.push(v); }
+    recordMoverSnapshot(views.map(t => ({
+      address: t.address, symbol: t.symbol, mc: t.mc,
+      vol24h: t.vol24h || 0, volH1: t.volH1, volM5: t.volM5,
+    })));
+    const now = Date.now();
+    for (const [k, ts] of popHandled) if (now - ts > POP_COOLDOWN_MS) popHandled.delete(k);
+    for (const m of getMovers().filter(x => x.setup === 'pop')) {
+      if (popHandled.has(m.mint)) continue;
+      popHandled.set(m.mint, now);
+      const full = views.find(v => v.address === m.mint);
+      if (!full) continue;
+      floorEmit('pop.detected', { mint: m.mint, symbol: m.symbol, changePct: m.changePct, mc: m.mc });
+      const t = {
+        ...full, address: m.mint, moverSetup: 'pop',
+        moverChangePct: m.changePct, moverDipPct: m.dipFromPeak,
+        source: 'movers', feeds: ['movers'],
+      };
+      const v = await vetToken(t, cfg);
+      if (v.verdict === 'KILLED') continue;
+      let spx = null; try { spx = await solPrice(); } catch { spx = null; }
+      const { entered } = await processSignal({
+        verdict: 'SCORED', score: v.score, breakdown: v.breakdown, dossier: v.dossier,
+        t, researchMod: 0, judgeMod: 0, eliteHit: false, flowTag: false, adapted: v.adapted,
+      }, cfg, { solPrice: spx });
+      if (entered) cycleStats.entries++;
+    }
+  } catch (e) {
+    cycleStats.errors++;
+    console.error('[loop] hot tick failed:', e.message);
+  } finally {
+    hotBusy = false;
   }
 }
 
@@ -482,6 +539,7 @@ export async function startLoop() {
   setInterval(() => { scanCycle().catch(() => {}); }, Math.max(20, cfg.scanIntervalSec) * 1000);
   priceTick().catch(() => {});
   setInterval(() => { priceTick().catch(() => {}); }, Math.max(10, cfg.priceIntervalSec) * 1000);
+  setInterval(() => { hotTick().catch(() => {}); }, 10 * 1000);   // v3.46
   console.log('[loop] started — scan every', cfg.scanIntervalSec + 's, price tick every', cfg.priceIntervalSec + 's');
 }
 

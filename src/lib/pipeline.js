@@ -10,6 +10,7 @@ import {
   curveProgress, isOnCurve, PUMP_SUFFIX,
 } from './pumpfun.js';
 import { buildFeeds, momentumScore } from './feeds.js';
+import { fetchJupTrending } from './jupTrending.js';
 import { washSpikeCheck, holderGate, lpLockCheck } from './antiscam.js';
 import { AGGRESSIVE_MOMENTUM_WEIGHT } from './config.js';
 import { getAdaptiveWeights } from './learning.js';
@@ -33,7 +34,7 @@ const isPumpOrigin = (address, pair) =>
 // ---------------------------------------------------------- SCAN
 export async function scanTokens() {
   probePumpPortal();
-  const [pumpLatest, pumpTop, pumpMovers, pumpGraduated, fresh, profiles, boosts] = await Promise.all([
+  const [pumpLatest, pumpTop, pumpMovers, pumpGraduated, fresh, profiles, boosts, jupTrend] = await Promise.all([
     fetchPumpLatest(40),
     fetchPumpTop(60),
     fetchPumpMovers(60),
@@ -41,25 +42,13 @@ export async function scanTokens() {
     fetchFreshPumpCoins(40),
     fetchLatestProfiles(60),
     fetchLatestBoosts(60),
+    fetchJupTrending(80).catch(() => []),   // v3.46: volume-ranked trending, all ages
   ]);
-  // v3.23: record top-coin snapshots for movers strategy (dip/breakout detection)
-  // v3.27: also record from the movers feed (mid-cap runners)
-  // v3.29: also record graduated PumpSwap coins (post-graduation runners)
-  try {
-    const { recordMoverSnapshot } = await import('./movers.js');
-    recordMoverSnapshot(pumpTop.map(c => ({
-      address: c.address, symbol: c.symbol,
-      mc: c.usd_market_cap || 0, vol24h: c.volume_24h || 0,
-    })));
-    recordMoverSnapshot(pumpMovers.map(c => ({
-      address: c.address, symbol: c.symbol,
-      mc: c.usdMc || c.usd_market_cap || 0, vol24h: c.volume_24h || 0,
-    })));
-    recordMoverSnapshot(pumpGraduated.map(c => ({
-      address: c.address, symbol: c.symbol,
-      mc: c.usdMc || 0, vol24h: c.vol24h || 0,
-    })));
-  } catch { /* movers is additive */ }
+  // v3.46: mover snapshots are now recorded AFTER DexScreener enrichment (see
+  // below) so they carry real market cap + volume. The old block recorded raw
+  // pump.fun rows: pumpTop rows had no `usd_market_cap` key (normalised to
+  // `usdMc`) so they were silently dropped, and no row carried volume, so the
+  // movers `avgVol > 5000` gate could never pass.
   // v3.30: touch the token registry for every discovered mint so nothing
   // disappears after one look. Graduated PumpSwap coins update the EXISTING
   // record's venue (no duplicate identities across venues).
@@ -105,11 +94,41 @@ export async function scanTokens() {
       meta.set(m.mint, { source: 'pumpportal', creator: m.creator || null, createdAt: m.ts });
     }
   }
-  const addrs = [...meta.keys()];
   for (const s of [...profiles, ...boosts]) {
-    if (s.address && !meta.has(s.address)) { meta.set(s.address, { source: s.source }); addrs.push(s.address); }
+    if (s.address && !meta.has(s.address)) meta.set(s.address, { source: s.source });
   }
-  const batch = addrs.slice(0, 120);
+  // v3.46: QUOTA batch instead of addrs.slice(0, 120).
+  // `meta` is filled newest-launch-first: pumpLatest + fresh (fresh alone replays
+  // up to ~120 remembered mints from the 90-min cache) ahead of top / movers /
+  // graduated / PumpPortal / boosts. Once the bot had been up a while, the first
+  // 120 slots were ALL brand-new launches and everything after — the movers
+  // list, graduated PumpSwap runners, boosts — was cut off before DexScreener
+  // was ever asked about it. Each source now gets its own quota.
+  const picked = new Set();
+  const take = (list, n) => {
+    let c = 0;
+    for (const x of list || []) {
+      const a = x && (x.address || x.mint);
+      if (!a || picked.has(a)) continue;
+      picked.add(a);
+      if (++c >= n) break;
+    }
+  };
+  take(jupTrend, 80);                   // volume-ranked trending (hours-to-weeks-old runners)
+  take(pumpMovers, 50);                 // pump.fun movers tab proxy (recent trades)
+  take(pumpGraduated, 50);              // PumpSwap graduated runners (QOAT-style)
+  take(pumpTop, 40);                    // trending by MC
+  take(profiles, 15); take(boosts, 15); // DexScreener profiles / boosts
+  take(ppMints, 25);                    // PumpPortal live mints
+  take(pumpLatest, 30);                 // newest launches
+  take(fresh, 30);                      // RugCheck firehose
+  // anything watched by the mover store (so a coin we saw earlier keeps being
+  // refreshed and can trigger the 'pop' detector)
+  try {
+    const { getWatchlist } = await import('./movers.js');
+    take(getWatchlist(60).map(m => ({ address: m })), 60);
+  } catch { /* additive */ }
+  const batch = [...picked].slice(0, 260);
   if (!batch.length) return { candidates: [], discovered: 0 };
 
   const raw = await fetchTokens(batch);
@@ -120,10 +139,18 @@ export async function scanTokens() {
     const t = tokenView(pair);
     if (t) enriched.set(a, { ...t, chainId: pair.chainId || null });
   }
+  // v3.46: record movers snapshots from enriched data (real MC + volume windows).
+  try {
+    const { recordMoverSnapshot } = await import('./movers.js');
+    recordMoverSnapshot([...enriched.values()].map(t => ({
+      address: t.address, symbol: t.symbol, mc: t.mc,
+      vol24h: t.vol24h || 0, volH1: t.volH1, volM5: t.volM5,
+    })));
+  } catch { /* movers is additive */ }
   // NEW = pump.fun API latest + firehose + PumpPortal; TRENDING = pump.fun
   // API top + DexScreener boosts/profiles; MOVERS = local momentum.
   const { tags, movers, rows } = buildFeeds({
-    fresh, pumpLatest, pumpTop, profiles, boosts, enriched,
+    fresh, pumpLatest, pumpTop, profiles, boosts: [...boosts, ...jupTrend], enriched,
     ppMints: ppMints.map(m => m.mint).filter(Boolean),
   });
   try { floorEmit('feeds.ready', rows); } catch { /* fail-open */ }
@@ -272,6 +299,7 @@ export function heatOf(t) {
     h += (t.buys24h / (t.buys24h + t.sells24h)) * 30;
   }
   if (t.mc < 200000 && turnover >= 1) h += 20;   // low-MC high-turnover = hot
+  if (t.moverSetup === 'pop') h += 100;          // v3.46: pops always research/score first
   return h;
 }
 

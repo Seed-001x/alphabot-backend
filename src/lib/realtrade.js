@@ -57,7 +57,8 @@ export async function processSignal(r, cfg, opts = {}) {
   const boost = r.eliteHit ? cfg.eliteBoost : 0;
   // v3.23: movers setup bonus — dip +12 / breakout +8 / momentum +5.
   let moverBonus = 0;
-  if (t.moverSetup === 'dip') moverBonus = 12;
+  if (t.moverSetup === 'pop') moverBonus = 10;   // v3.46: fast vertical-move detector
+  else if (t.moverSetup === 'dip') moverBonus = 12;
   else if (t.moverSetup === 'breakout') moverBonus = 8;
   else if (t.moverSetup === 'momentum') moverBonus = 5;
   // Learned post-pump fade (movers bypass — proven momentum).
@@ -157,8 +158,19 @@ export async function processSignal(r, cfg, opts = {}) {
   }
   if (t.graduated) {
     const lp = dossier && dossier.lpLockedPct;
-    if (lp == null) return gate(`graduated but no LP lock data — uncertain, skip`);
-    if (lp < 80) return gate(`LP only ${lp}% locked — dev can pull`);
+    if (lp == null) {
+      // v3.46: RugCheck often has no LP-lock field for older / non-migrated
+      // pools (e.g. a 2-year-old mint that revives on PumpSwap/Raydium). The old
+      // rule skipped every one of them, which silently removed the whole
+      // "dormant coin wakes up" class of runner. Unknown lock → require real
+      // pool depth instead: >= $10k liquidity AND >= 3% of market cap.
+      const liq = t.liquidity || 0;
+      const depth = t.mc > 0 ? liq / t.mc : 0;
+      if (!(liq >= 10000 && depth >= 0.03))
+        return gate(`graduated, LP lock unknown and pool too thin (${fmtUsd(liq)} liq = ${(depth * 100).toFixed(1)}% of MC)`);
+    } else if (lp < 80) {
+      return gate(`LP only ${lp}% locked — dev can pull`);
+    }
   }
   // 5. Scam checks: rugged flag + bundled supply (dev-split wallets).
   if (dossier && dossier.rugged === true) return gate(`RugCheck flags RUGGED`);
