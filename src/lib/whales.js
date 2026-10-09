@@ -262,6 +262,25 @@ export async function getWalletBuys(address) {
   return { ...data, cached: false };
 }
 
+// v3.42: lightweight whale-accumulation check for the entry pipeline.
+// Reads the in-memory walletCache only — NO network. Returns
+// { wallets: n, hasData: bool } where n = distinct tracked wallets that
+// bought this mint in the last 24h. hasData=false means the cache is cold
+// (no wallet buy data yet) — caller decides fail-open vs fail-closed.
+export function whaleBuyWallets(mint) {
+  const dayAgo = Date.now() - 86400000;
+  const wallets = new Set();
+  let hasData = false;
+  for (const [address, entry] of walletCache) {
+    const buys = entry.buys || [];
+    if (buys.length) hasData = true;
+    for (const b of buys) {
+      if (b && b.mint === mint && b.ts >= dayAgo) wallets.add(address);
+    }
+  }
+  return { wallets: wallets.size, hasData };
+}
+
 // POST /api/research/synthesize — accumulation signals across tracked wallets.
 // Finds tokens bought by 2+ distinct wallets in the last 24h, sorted by
 // wallet count (then total SOL spent). Read-only; never touches trading.

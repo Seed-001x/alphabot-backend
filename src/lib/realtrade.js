@@ -111,14 +111,66 @@ export async function processSignal(r, cfg, opts = {}) {
 
   // v3.39 APE MODE per user ("fuck all the restriction bullshit") — ALL entry
   // gates disabled except: honeypot check, wallet balance (realbook), max positions.
-  // v3.41 MINIMAL dead-coin gates per user ("don't buy dead shit" — BotPfp had
-  // 3 holders / $3.3K MC and got bought). These are the ONLY filters back.
-  // FAIL-CLOSED: if we don't know holders or MC, don't buy.
+  // v3.42 "0.06 → 0.2" plan per user 2026-10-09 — the universe is:
+  //   movers-tab coins + whale-wallet copy trades, $50K+ MC, locked liquidity,
+  //   no wash/bundle bot activity, no scams. Everything else stays ape.
+  // 1. Dead-coin (KEEP from v3.41): fail-closed holders + MC.
   const holderCount = (t.holders != null ? t.holders : (r.dossier && r.dossier.holderCount));
   if (holderCount == null) return gate(`dead coin — no holder data (fail-closed)`);
   if (holderCount < 50) return gate(`dead coin — ${holderCount} holders (< 50)`);
   if (t.mc == null || t.mc <= 0) return gate(`dead coin — no MC data (fail-closed)`);
-  if (t.mc < 10000) return gate(`dead coin — $${Math.round(t.mc)} MC (< $10K)`);
+  // 2. MC floor $50K per user ("focus on 50k+ market caps").
+  if (t.mc < 50000) return gate(`MC $${Math.round(t.mc).toLocaleString()} < $50K floor`);
+  // 3. Universe gate: movers-tab OR whale-accumulated (2+ tracked wallets, 24h).
+  const isMover = !!(t.feeds && t.feeds.includes('movers'));
+  let whaleWallets = 0, whaleHasData = false;
+  try {
+    const { whaleBuyWallets } = await import('./whales.js');
+    const w = whaleBuyWallets(t.address);
+    whaleWallets = w.wallets; whaleHasData = w.hasData;
+  } catch { /* whale check unavailable */ }
+  const whaleHit = whaleWallets >= 2;
+  if (whaleHit) {
+    try { floorEmit('whale.copy', { mint: t.address, symbol: t.symbol, wallets: whaleWallets }); } catch {}
+  }
+  if (!isMover && !whaleHit) {
+    // Fail-open ONLY when the whale cache is completely cold (bot just started,
+    // no wallet data yet) — otherwise this is a hard universe gate per user.
+    if (!whaleHasData) {
+      try { floorEmit('universe.cold', { mint: t.address, symbol: t.symbol, reason: 'whale cache cold, not movers-tagged — fail-open' }); } catch {}
+    } else {
+      return gate(`not on movers tab, no whale accumulation (${whaleWallets} wallets)`);
+    }
+  }
+  // 4. Locked liquidity per user ("only pump fun coins with locked liquidity").
+  // RugCheck dossier is cached (REPORT_TTL) so this is cheap on repeat mints.
+  // On-curve pump.fun coins pass (the curve IS the liquidity); graduated coins
+  // need >=80% of LP locked or the dev can pull it.
+  let dossier = r.dossier || null;
+  if (!dossier) {
+    try {
+      const { fetchRugReport } = await import('./pumpfun.js');
+      dossier = await fetchRugReport(t.address);
+    } catch { dossier = null; }
+  }
+  if (t.graduated) {
+    const lp = dossier && dossier.lpLockedPct;
+    if (lp == null) return gate(`graduated but no LP lock data — uncertain, skip`);
+    if (lp < 80) return gate(`LP only ${lp}% locked — dev can pull`);
+  }
+  // 5. Scam checks: rugged flag + bundled supply (dev-split wallets).
+  if (dossier && dossier.rugged === true) return gate(`RugCheck flags RUGGED`);
+  if (dossier && dossier.bundleScore != null && dossier.bundleScore >= 60)
+    return gate(`bundled supply — bundleScore ${dossier.bundleScore} (dev-split wallets)`);
+  // 6. Bot activity / wash trading per user ("check for bot activity and bundle volume").
+  try {
+    const { checkBuyDistribution } = await import('./washtrade.js');
+    const wash = await checkBuyDistribution(t.address);
+    if (wash && wash.isWashTrade) {
+      try { floorEmit('wash.reject', { mint: t.address, symbol: t.symbol, reason: wash.reason, stats: wash.stats }); } catch {}
+      return gate(`wash trading: ${wash.reason}`);
+    }
+  } catch { /* fail-open: no wash data = no block */ }
   // if (STABLE_MINTS.has(t.address)) return gate('stablecoin excluded');
   // if (!(finalScore >= cfg.minTokenScore)) return gate(`score ${finalScore} < ${cfg.minTokenScore} bar`);
   // v3.32 TA resistance gate — DISABLED v3.39 (ape mode). Was a hard skip on
@@ -177,9 +229,9 @@ export async function processSignal(r, cfg, opts = {}) {
   // if (cd && now - cd < cfg.cooldownMin * 60000)
   //   return gate(`cooldown — ${fmtDur(cfg.cooldownMin * 60000 - (now - cd))} left`);
 
-  // v3.37: FLAT 0.05 SOL for ALL trades per user — no score tiers, no volume boost.
-  // "no matter what the fuck the score is push it with 0.05"
-  let solSize = 0.05;
+  // v3.42: FLAT 0.02 SOL for ALL trades per user — wallet is low, stretch the ammo.
+  // "the bot is low on funds but can still execute .02 trades"
+  let solSize = 0.02;
   const spx = (opts && opts.solPrice) || 150; // v3.39: restored — v3.37 dropped it, sizeUsd went NaN
   // v3.39 APE MODE — no-price gate DISABLED per user. Honeypot check is the safety net.
   // if (!(t.price > 0)) return gate('no price');
@@ -197,8 +249,8 @@ export async function processSignal(r, cfg, opts = {}) {
     const thinkToken = { ...t, score: finalScore, buyPressure: (r.breakdown && r.breakdown.buyPressure) || null };
     const adaptive = thinkEntry(thinkToken, cfg, walletUsd);
     adaptiveReasoning = adaptive.reasoning || [];
-    // v3.38: FLAT 0.05 — do NOT let thinker override size (was undoing flat sizing)
-    // adaptive.solSize intentionally ignored per user: "push it with 0.05"
+    // v3.42: FLAT 0.02 — do NOT let thinker override size
+    // adaptive.solSize intentionally ignored per user
     adaptiveTp = adaptive.tp;
     adaptiveSl = adaptive.sl;
   } catch { /* thinker failed → use standard sizing */ }
@@ -219,7 +271,7 @@ export async function processSignal(r, cfg, opts = {}) {
     // v3.20: conviction holds — high-score plays get more time to run.
     maxHoldMs: finalScore >= 70 ? 4 * 3600e3 : finalScore >= 50 ? 2.5 * 3600e3 : null,
     // v3.20: bundle distribution tracking.
-    bundleAtEntry: r.dossier && r.dossier.bundlePct != null ? r.dossier.bundlePct : null,
+    bundleAtEntry: dossier && dossier.bundlePct != null ? dossier.bundlePct : null,
   };
 
   // v3.26 ANTISCAM: honeypot simulation — await the parallel check started earlier.

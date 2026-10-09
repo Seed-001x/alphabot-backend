@@ -462,11 +462,13 @@ app.get('/api/live-config', async (req, res) => {
     res.json({
       ok: true,
       ts: Date.now(),
-      sizes: { flat: 0.05, note: 'flat 0.05 SOL all trades (v3.37)' },
+      sizes: { flat: 0.02, note: 'flat 0.02 SOL all trades (v3.42)' },
       fees: { priorityLamports: c.priorityFeeLamports, jitoTipLamports: c.jitoTipLamports },
       sl: { min: 0.10, max: 0.40, note: 'freethinker.js clamp' },
       tp: { min: 1.0, max: 5.0, note: 'freethinker.js clamp, 2x minimum' },
-      killSwitchEquity: 11,
+      killSwitchEquity: null,
+      killSwitchNote: 'permanently disabled per user 2026-10-09 (v3.40)',
+      universe: { mcFloor: 50000, moversOrWhale: true, lpLock: true, washCheck: true, note: 'v3.42: movers tab + whale copy-trades, $50K+ MC, locked LP, no wash/bundle' },
       maxPositions: c.maxPositions,
     });
   } catch (e) {
