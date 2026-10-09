@@ -119,7 +119,11 @@ export function thinkEntry(t, cfg, bankrollUsd) {
  * @returns {object|null} { reason, action: 'sell'|'hold' } or null if no attention needed
  */
 export function thinkExit(pos, q, cfg) {
-  const midMultiple = q.mc / pos.entryMc;
+  // v3.41: THINKER SELL AUTHORITY REVOKED per user.
+  // The AI was selling winners at +5% (neigh) when TP is 2x.
+  // "Who tf gave that instruction" — nobody. Removing it.
+  // Thinker can only HOLD, never SELL. Mechanical TP/SL/trailing only.
+  return null;
   if (!(midMultiple > 0)) return null;
   const pnlPct = (midMultiple - 1) * 100;
 
