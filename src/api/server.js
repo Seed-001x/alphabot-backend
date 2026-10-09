@@ -457,16 +457,17 @@ app.use((err, req, res, _next) => {
 // NOTE: must be registered BEFORE the 404 catch-all below.
 app.get('/api/live-config', async (req, res) => {
   try {
-    const { cfg } = await import('../lib/config.js');
+    const { loadConfig } = await import('../lib/config.js');
+    const c = loadConfig() || {};
     res.json({
       ok: true,
       ts: Date.now(),
-      sizes: { base: cfg.solSizeBase, mid: cfg.solSizeMid, top: cfg.solSizeTop, flat: 0.05 },
-      fees: { priority: cfg.priorityFeeLamports, jitoTip: cfg.jitoTipLamports },
-      sl: { min: 0.10, max: 0.40 },
-      tp: { min: 1.0, max: 5.0 },
-      killSwitch: cfg.killSwitchEquity || 11,
-      maxPositions: cfg.maxPositions,
+      sizes: { flat: 0.05, note: 'flat 0.05 SOL all trades (v3.37)' },
+      fees: { priorityLamports: c.priorityFeeLamports, jitoTipLamports: c.jitoTipLamports },
+      sl: { min: 0.10, max: 0.40, note: 'freethinker.js clamp' },
+      tp: { min: 1.0, max: 5.0, note: 'freethinker.js clamp, 2x minimum' },
+      killSwitchEquity: 11,
+      maxPositions: c.maxPositions,
     });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e.message) });
