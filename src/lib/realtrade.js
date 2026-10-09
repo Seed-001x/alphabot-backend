@@ -150,22 +150,9 @@ export async function processSignal(r, cfg, opts = {}) {
   if (cd && now - cd < cfg.cooldownMin * 60000)
     return gate(`cooldown — ${fmtDur(cfg.cooldownMin * 60000 - (now - cd))} left`);
 
-  // v3.19: SOL-denominated sizing. Score bands only.
-  // 55–74 → base · 75–84 → mid · 85+ → top.
-  const spx = (opts && opts.solPrice) || 150;
-  let solSize;
-  if (finalScore >= 85) solSize = cfg.solSizeTop;
-  else if (finalScore >= 75) solSize = cfg.solSizeMid;
-  else solSize = cfg.solSizeBase;
-  solSize = solSize || 1.0;
-  // v3.19: volume boost — turnover (vol24h / MC) ≥ volBoostTurnover bumps one tier.
-  let volBoosted = false;
-  const turnover = (t.vol24h && t.mc) ? t.vol24h / t.mc : 0;
-  if (turnover >= (cfg.volBoostTurnover || Infinity)) {
-    if (solSize === cfg.solSizeBase) { solSize = cfg.solSizeMid; volBoosted = true; }
-    else if (solSize === cfg.solSizeMid) { solSize = cfg.solSizeTop; volBoosted = true; }
-  }
-  if (!(solSize > 0)) return gate('bad size');
+  // v3.37: FLAT 0.05 SOL for ALL trades per user — no score tiers, no volume boost.
+  // "no matter what the fuck the score is push it with 0.05"
+  let solSize = 0.05;
   if (!(t.price > 0)) return gate('no price');
 
   // v3.26: Start honeypot check EARLY (parallel) — runs during thinker/entry prep.
