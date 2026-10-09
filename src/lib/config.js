@@ -59,7 +59,7 @@ export const DEFAULT_CONFIG = {
   // --- REAL-ONLY execution (v3.25) ---
   realMaxSizePct: 0.70,        // max 70% of wallet per trade (tunable)
   priorityFeeLamports: 500000, // v3.33: 0.0005 SOL priority fee per tx (user: maximize small wins)
-  jitoTipLamports: 1000000,     // v3.25: 0.001 SOL Jito tip on direct buys (dual-route)
+  jitoTipLamports: 500000,       // v3.36: 0.0005 SOL Jito tip (user: 0.0005 on both)
   // --- LOOP ---
   scanIntervalSec: 30,   // v3.14: quicker scans (user 2026-10-06) — was 45s
   priceIntervalSec: 15,   // v3.14: quicker ticks — was 20s
