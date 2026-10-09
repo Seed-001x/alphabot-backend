@@ -109,18 +109,20 @@ export async function processSignal(r, cfg, opts = {}) {
     return done(sig, false);
   };
 
-  if (STABLE_MINTS.has(t.address)) return gate('stablecoin excluded');
-  if (!(finalScore >= cfg.minTokenScore)) return gate(`score ${finalScore} < ${cfg.minTokenScore} bar`);
-  // v3.32: TA resistance gate — buying into the ceiling is a hard skip,
-  // even if the score is fine. Logged to the registry evaluation record.
-  if (taCheck && taCheck.decision === 'reject') {
-    try { floorEmit('ta.reject', { mint: t.address, symbol: t.symbol, reason: taCheck.reason, swingHigh: taCheck.swingHigh }); } catch {}
-    try {
-      const { registryAttachTa } = await import('./registry.js');
-      registryAttachTa(t.address, taCheck);
-    } catch { /* registry is additive */ }
-    return gate(`TA: ${taCheck.reason}`);
-  }
+  // v3.39 APE MODE per user ("fuck all the restriction bullshit") — ALL entry
+  // gates disabled except: honeypot check, wallet balance (realbook), max positions.
+  // if (STABLE_MINTS.has(t.address)) return gate('stablecoin excluded');
+  // if (!(finalScore >= cfg.minTokenScore)) return gate(`score ${finalScore} < ${cfg.minTokenScore} bar`);
+  // v3.32 TA resistance gate — DISABLED v3.39 (ape mode). Was a hard skip on
+  // buying into the ceiling. Logged to registry evaluation record.
+  // if (taCheck && taCheck.decision === 'reject') {
+  //   try { floorEmit('ta.reject', { mint: t.address, symbol: t.symbol, reason: taCheck.reason, swingHigh: taCheck.swingHigh }); } catch {}
+  //   try {
+  //     const { registryAttachTa } = await import('./registry.js');
+  //     registryAttachTa(t.address, taCheck);
+  //   } catch { /* registry is additive */ }
+  //   return gate(`TA: ${taCheck.reason}`);
+  // }
   // v3.32: log TA boost/neutral decisions to the evaluation record too.
   if (taCheck && taCheck.decision !== 'skip') {
     try { floorEmit('ta.check', { mint: t.address, symbol: t.symbol, decision: taCheck.decision, reason: taCheck.reason }); } catch {}
@@ -160,15 +162,19 @@ export async function processSignal(r, cfg, opts = {}) {
   //   try { floorEmit('fakepattern.flag', { mint: t.address, symbol: t.symbol, reason: fakeCheck.reason, confidence: fakeCheck.confidence }); } catch {}
   // }
   if (openPositions.length >= cfg.maxPositions) return gate(`max ${cfg.maxPositions} positions open`);
-  if (openPositions.some(x => x.mint === t.address)) return gate(`already holding ${t.symbol}`);
-  const cd = (R && R.cooldowns || {})[t.address];
-  if (cd && now - cd < cfg.cooldownMin * 60000)
-    return gate(`cooldown — ${fmtDur(cfg.cooldownMin * 60000 - (now - cd))} left`);
+  // v3.39 APE MODE — already-holding + cooldown gates DISABLED per user.
+  // Re-entry into a held coin is allowed (user liked the double-entry behavior).
+  // if (openPositions.some(x => x.mint === t.address)) return gate(`already holding ${t.symbol}`);
+  // const cd = (R && R.cooldowns || {})[t.address];
+  // if (cd && now - cd < cfg.cooldownMin * 60000)
+  //   return gate(`cooldown — ${fmtDur(cfg.cooldownMin * 60000 - (now - cd))} left`);
 
   // v3.37: FLAT 0.05 SOL for ALL trades per user — no score tiers, no volume boost.
   // "no matter what the fuck the score is push it with 0.05"
   let solSize = 0.05;
-  if (!(t.price > 0)) return gate('no price');
+  const spx = (opts && opts.solPrice) || 150; // v3.39: restored — v3.37 dropped it, sizeUsd went NaN
+  // v3.39 APE MODE — no-price gate DISABLED per user. Honeypot check is the safety net.
+  // if (!(t.price > 0)) return gate('no price');
 
   // v3.26: Start honeypot check EARLY (parallel) — runs during thinker/entry prep.
   const hpPromise = honeypotCheck(t.address, 6).catch(e => ({
@@ -233,7 +239,7 @@ export async function processSignal(r, cfg, opts = {}) {
   sig.taken = true;
   const thinkerNote = adaptiveReasoning.length ? ` 🧠[${adaptiveReasoning.join('; ')}]` : '';
   const adaptiveNote = (adaptiveTp != null) ? ` TP ${Math.round(adaptiveTp * 100)}%/SL ${Math.round(adaptiveSl * 100)}%` : '';
-  sig.reason = `ENTER ${t.symbol} · score ${finalScore}${researchMod ? ` (${researchMod >= 0 ? '+' : ''}${researchMod} research)` : ''}${r.eliteHit ? ` (+${boost} smart flow)` : ''}${volBoosted ? ` (VOL ×${turnover.toFixed(1)} boost)` : ''} · ${pos.solSize.toFixed(2)} SOL (${fmtUsd(pos.sizeUsd)}) @ ${fmtUsd(entryMc)} MC${adaptiveNote}${thinkerNote} · ${pos.route || 'jupiter'}`;
+  sig.reason = `ENTER ${t.symbol} · score ${finalScore}${researchMod ? ` (${researchMod >= 0 ? '+' : ''}${researchMod} research)` : ''}${r.eliteHit ? ` (+${boost} smart flow)` : ''} · ${pos.solSize.toFixed(2)} SOL (${fmtUsd(pos.sizeUsd)}) @ ${fmtUsd(entryMc)} MC${adaptiveNote}${thinkerNote} · ${pos.route || 'jupiter'}`;
   return done(sig, true);
 }
 

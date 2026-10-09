@@ -337,45 +337,48 @@ export function copycatKill(t) {
 }
 
 export async function vetToken(t, cfg) {
-  const fk = freeKill(t, cfg);
-  if (fk) {
-    floorEmit('vet.kill', { mint: t.address, symbol: t.symbol, name: t.name, killPass: 'free', killReason: fk });
-    return { verdict: 'KILLED', killReason: fk, killPass: 'free', t };
-  }
+  // v3.39 APE MODE per user ("fuck all the restriction bullshit") — the ENTIRE
+  // vet kill chain is disabled. Every discovered coin flows to scoring and the
+  // entry path. Remaining safety: honeypot simulation in realtrade.js (before
+  // every buy), wallet balance + max positions. Exits: 40% SL / 2x TP.
+  // const fk = freeKill(t, cfg);
+  // if (fk) {
+  //   floorEmit('vet.kill', { mint: t.address, symbol: t.symbol, name: t.name, killPass: 'free', killReason: fk });
+  //   return { verdict: 'KILLED', killReason: fk, killPass: 'free', t };
+  // }
   // v3.20: copycat check REMOVED per user 2026-10-07 — no more copycat killer.
-  const tk = tradeKill(t, cfg);
-  if (tk) {
-    floorEmit('vet.kill', { mint: t.address, symbol: t.symbol, name: t.name, killPass: 'trade', killReason: tk });
-    return { verdict: 'KILLED', killReason: tk, killPass: 'trade', t };
-  }
-  const { reason, dossier } = await rugKill(t, cfg);
-  if (dossier) floorEmit('dossier.ready', {
-    mint: t.address, symbol: t.symbol, name: t.name,
-    devPct: dossier.devPct, topPct: dossier.topPct, top10Pct: dossier.top10Pct,
-    holderCount: dossier.holderCount, rugged: dossier.rugged, risks: dossier.risks || [],
-  });
-  if (reason) {
-    floorEmit('vet.kill', { mint: t.address, symbol: t.symbol, name: t.name, killPass: 'rug', killReason: reason });
-    return { verdict: 'KILLED', killReason: reason, killPass: 'rug', dossier, t };
-  }
-  // v3.26 ANTISCAM: holder floor — minimum 300 holders, no exceptions.
-  // Fail closed: no holder data = uncertain = skip.
-  {
-    const hg = holderGate(dossier);
-    if (!hg.pass) {
-      floorEmit('vet.kill', { mint: t.address, symbol: t.symbol, name: t.name, killPass: 'holders', killReason: hg.reason });
-      return { verdict: 'KILLED', killReason: hg.reason, killPass: 'holders', dossier, t };
-    }
-  }
-  // v3.26 ANTISCAM: LP lock — graduated coins must have >=80% of LP locked.
-  // On-curve coins pass automatically (the curve can't be LP-pulled).
-  {
-    const lp = lpLockCheck(dossier, t.graduated);
-    if (!lp.pass) {
-      floorEmit('vet.kill', { mint: t.address, symbol: t.symbol, name: t.name, killPass: 'lplock', killReason: lp.reason });
-      return { verdict: 'KILLED', killReason: lp.reason, killPass: 'lplock', dossier, t };
-    }
-  }
+  // const tk = tradeKill(t, cfg);
+  // if (tk) {
+  //   floorEmit('vet.kill', { mint: t.address, symbol: t.symbol, name: t.name, killPass: 'trade', killReason: tk });
+  //   return { verdict: 'KILLED', killReason: tk, killPass: 'trade', t };
+  // }
+  // const { reason, dossier } = await rugKill(t, cfg);
+  // if (dossier) floorEmit('dossier.ready', {
+  //   mint: t.address, symbol: t.symbol, name: t.name,
+  //   devPct: dossier.devPct, topPct: dossier.topPct, top10Pct: dossier.top10Pct,
+  //   holderCount: dossier.holderCount, rugged: dossier.rugged, risks: dossier.risks || [],
+  // });
+  // if (reason) {
+  //   floorEmit('vet.kill', { mint: t.address, symbol: t.symbol, name: t.name, killPass: 'rug', killReason: reason });
+  //   return { verdict: 'KILLED', killReason: reason, killPass: 'rug', dossier, t };
+  // }
+  // v3.26 ANTISCAM holder floor (300 holders) — DISABLED v3.39 (ape mode).
+  // {
+  //   const hg = holderGate(dossier);
+  //   if (!hg.pass) {
+  //     floorEmit('vet.kill', { mint: t.address, symbol: t.symbol, name: t.name, killPass: 'holders', killReason: hg.reason });
+  //     return { verdict: 'KILLED', killReason: hg.reason, killPass: 'holders', dossier, t };
+  //   }
+  // }
+  // v3.26 ANTISCAM LP lock — DISABLED v3.39 (ape mode).
+  // {
+  //   const lp = lpLockCheck(dossier, t.graduated);
+  //   if (!lp.pass) {
+  //     floorEmit('vet.kill', { mint: t.address, symbol: t.symbol, name: t.name, killPass: 'lplock', killReason: lp.reason });
+  //     return { verdict: 'KILLED', killReason: lp.reason, killPass: 'lplock', dossier, t };
+  //   }
+  // }
+  const dossier = null;
   const { score, breakdown, adapted, weights } = scoreToken(t, dossier, cfg);
   floorEmit('vet.scored', {
     mint: t.address, symbol: t.symbol, name: t.name, score, breakdown,
