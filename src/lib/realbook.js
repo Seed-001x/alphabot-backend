@@ -438,7 +438,14 @@ export async function realEnter(entry, t, cfg) {
   // Here we apply only the real-money guardrails.
   let spx = 150;
   try { spx = await solPrice(); } catch {}
-  const walletUsd = R.cash + (R.positions || []).reduce((a, x) => a + (x.sizeUsd || 0), 0);
+  // v3.48: R.cash can be 0/stale — fall back to on-chain wallet balance.
+  let walletUsd = R.cash + (R.positions || []).reduce((a, x) => a + (x.sizeUsd || 0), 0);
+  if (!(walletUsd > 0)) {
+    try {
+      const st = await realWalletState([]);
+      if (st && st.sol > 0) walletUsd = st.sol * spx;
+    } catch {}
+  }
   let solSize = entry.solSize;
   // Hard cap: configurable via tuning (realMaxSizePct), default 30% of wallet per trade
   const maxPct = Math.min(0.95, Math.max(0.05, cfg.realMaxSizePct || REAL_MAX_SIZE_PCT));
