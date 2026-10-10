@@ -124,7 +124,7 @@ export async function processSignal(r, cfg, opts = {}) {
   if (holderCount != null && holderCount < 50) return gate(`dead coin — ${holderCount} holders (< 50)`);
   if (mc == null || mc <= 0) return gate(`dead coin — no MC data (fail-closed)`);
   // 2. MC floor $20K per user.
-  if (mc < 20000) return gate(`MC $${Math.round(mc).toLocaleString()} < $20K floor`);
+  if (mc < 10000) return gate(`MC $${Math.round(mc).toLocaleString()} < $10K floor`);
   // 3. Universe gate: movers-tab OR trending-tab OR whale-accumulated (2+ tracked wallets, 24h).
   const isMover = !!(t.feeds && t.feeds.includes('movers'));
   const isTrending = !!(t.feeds && t.feeds.includes('trending'));
